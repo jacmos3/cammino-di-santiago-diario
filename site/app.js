@@ -67,6 +67,7 @@ let dataCache = null;
 let trackByDay = null;
 let miniMap = null;
 let miniLayer = null;
+let cleanupSectionSync = null;
 
 const formatDate = (dateStr) => {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -295,14 +296,20 @@ const ensureMiniMap = () => {
 
 const renderMiniMap = (dayKey) => {
   try {
+    const body = document.getElementById('mini-map-body');
     const dateEl = document.getElementById('mini-map-date');
     if (dateEl) dateEl.textContent = formatDate(dayKey);
     if (!trackByDay || !trackByDay[dayKey] || trackByDay[dayKey].length === 0) {
-      const body = document.getElementById('mini-map-body');
       if (body) {
-        body.innerHTML = `<div class="mini-map__empty">${I18N[currentLang].mini_map_empty}</div>`;
+        body.classList.add('is-empty');
+        body.setAttribute('data-empty-message', I18N[currentLang].mini_map_empty);
       }
+      if (miniLayer) miniLayer.clearLayers();
       return;
+    }
+    if (body) {
+      body.classList.remove('is-empty');
+      body.removeAttribute('data-empty-message');
     }
     const map = ensureMiniMap();
     if (!map) return;
@@ -318,16 +325,23 @@ const renderMiniMap = (dayKey) => {
   } catch (err) {
     const body = document.getElementById('mini-map-body');
     if (body) {
-      body.innerHTML = `<div class=\"mini-map__empty\">Errore mappa: ${err.message || err}</div>`;
+      body.classList.add('is-empty');
+      body.setAttribute('data-empty-message', `Errore mappa: ${err.message || err}`);
     }
   }
 };
 
 const observeSections = () => {
+  if (cleanupSectionSync) {
+    cleanupSectionSync();
+    cleanupSectionSync = null;
+  }
+
   const nav = document.getElementById('timeline-nav');
   const buttons = Array.from(document.querySelectorAll('.timeline-nav__inner button'));
   const sections = Array.from(document.querySelectorAll('.day'));
-  if (!('IntersectionObserver' in window) || !sections.length) return;
+  if (!sections.length) return;
+
   const ensureVisible = (btn) => {
     if (!nav || !btn) return;
     const navRect = nav.getBoundingClientRect();
@@ -337,21 +351,51 @@ const observeSections = () => {
       nav.scrollTo({ left: nav.scrollLeft + offset, behavior: 'smooth' });
     }
   };
-  const observer = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          const idx = sections.indexOf(entry.target);
-          buttons.forEach((btn, i) => btn.classList.toggle('active', i === idx));
-          ensureVisible(buttons[idx]);
-          const dayKey = entry.target.id.replace('day-', '');
-          renderMiniMap(dayKey);
-        }
-      });
-    },
-    { rootMargin: '-40% 0px -50% 0px', threshold: 0.1 }
-  );
-  sections.forEach((s) => observer.observe(s));
+
+  let activeIndex = -1;
+  let ticking = false;
+
+  const setActiveIndex = (idx) => {
+    if (idx < 0 || idx >= sections.length || idx === activeIndex) return;
+    activeIndex = idx;
+    buttons.forEach((btn, i) => btn.classList.toggle('active', i === idx));
+    ensureVisible(buttons[idx]);
+    const dayKey = sections[idx].id.replace('day-', '');
+    renderMiniMap(dayKey);
+  };
+
+  const pickIndexFromScroll = () => {
+    const anchorY = Math.max(120, window.innerHeight * 0.35);
+    let idx = 0;
+    for (let i = 0; i < sections.length; i += 1) {
+      const top = sections[i].getBoundingClientRect().top;
+      if (top <= anchorY) idx = i;
+      else break;
+    }
+    return idx;
+  };
+
+  const syncFromScroll = () => {
+    ticking = false;
+    setActiveIndex(pickIndexFromScroll());
+  };
+
+  const onScroll = () => {
+    if (!ticking) {
+      ticking = true;
+      window.requestAnimationFrame(syncFromScroll);
+    }
+  };
+
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', onScroll);
+  setActiveIndex(0);
+  onScroll();
+
+  cleanupSectionSync = () => {
+    window.removeEventListener('scroll', onScroll);
+    window.removeEventListener('resize', onScroll);
+  };
 };
 
 const renderView = () => {
