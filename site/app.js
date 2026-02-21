@@ -127,7 +127,7 @@ const modalBody = document.getElementById('live-modal-body');
 const modalClose = document.getElementById('live-modal-close');
 const modalBackdrop = document.getElementById('live-modal-backdrop');
 
-const attachImageZoom = (image) => {
+const attachImageZoom = (image, controls = null) => {
   let scale = 1;
   let tx = 0;
   let ty = 0;
@@ -140,6 +140,7 @@ const attachImageZoom = (image) => {
   const pointers = new Map();
   let pinchStartDistance = 0;
   let pinchStartScale = 1;
+  const ZOOM_STEP = 1.2;
 
   const getPanLimits = () => {
     const maxX = (image.clientWidth * (scale - 1)) / 2;
@@ -153,6 +154,10 @@ const attachImageZoom = (image) => {
     ty = clamp(ty, -maxY, maxY);
     image.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
     image.classList.toggle('is-zoomed', scale > 1.001);
+    if (controls) {
+      if (controls.zoomOut) controls.zoomOut.disabled = scale <= 1.001;
+      if (controls.zoomIn) controls.zoomIn.disabled = scale >= 4.999;
+    }
   };
 
   const zoomTo = (nextScale) => {
@@ -182,8 +187,12 @@ const attachImageZoom = (image) => {
     event.preventDefault();
     zoomTo(scale > 1.1 ? 1 : 2);
   };
+  const onZoomInClick = () => zoomTo(scale * ZOOM_STEP);
+  const onZoomOutClick = () => zoomTo(scale / ZOOM_STEP);
+  const onResetClick = () => zoomTo(1);
 
   const onPointerDown = (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pointers.size === 2) {
       pinchStartDistance = pointerDistance();
@@ -194,6 +203,7 @@ const attachImageZoom = (image) => {
       return;
     }
     if (scale <= 1.001) return;
+    event.preventDefault();
     activePointerId = event.pointerId;
     isDragging = true;
     dragStartX = event.clientX;
@@ -209,11 +219,13 @@ const attachImageZoom = (image) => {
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     }
     if (pointers.size >= 2 && pinchStartDistance > 0) {
+      event.preventDefault();
       const distance = pointerDistance();
       if (distance > 0) zoomTo(pinchStartScale * (distance / pinchStartDistance));
       return;
     }
     if (!isDragging || event.pointerId !== activePointerId) return;
+    event.preventDefault();
     tx = startTx + (event.clientX - dragStartX);
     ty = startTy + (event.clientY - dragStartY);
     applyTransform();
@@ -237,7 +249,11 @@ const attachImageZoom = (image) => {
   image.addEventListener('pointermove', onPointerMove);
   image.addEventListener('pointerup', endDragging);
   image.addEventListener('pointercancel', endDragging);
-  image.addEventListener('pointerleave', endDragging);
+  if (controls) {
+    if (controls.zoomIn) controls.zoomIn.addEventListener('click', onZoomInClick);
+    if (controls.zoomOut) controls.zoomOut.addEventListener('click', onZoomOutClick);
+    if (controls.reset) controls.reset.addEventListener('click', onResetClick);
+  }
 
   applyTransform();
 
@@ -248,7 +264,11 @@ const attachImageZoom = (image) => {
     image.removeEventListener('pointermove', onPointerMove);
     image.removeEventListener('pointerup', endDragging);
     image.removeEventListener('pointercancel', endDragging);
-    image.removeEventListener('pointerleave', endDragging);
+    if (controls) {
+      if (controls.zoomIn) controls.zoomIn.removeEventListener('click', onZoomInClick);
+      if (controls.zoomOut) controls.zoomOut.removeEventListener('click', onZoomOutClick);
+      if (controls.reset) controls.reset.removeEventListener('click', onResetClick);
+    }
   };
 };
 
@@ -265,9 +285,32 @@ const openImageModal = (item) => {
   image.src = item.src;
   image.alt = item.orig || '';
   image.className = 'modal__image';
+  image.draggable = false;
+  const zoomControls = document.createElement('div');
+  zoomControls.className = 'modal__zoom-controls';
+  const zoomOutBtn = document.createElement('button');
+  zoomOutBtn.type = 'button';
+  zoomOutBtn.className = 'modal__zoom-btn';
+  zoomOutBtn.textContent = '−';
+  const zoomInBtn = document.createElement('button');
+  zoomInBtn.type = 'button';
+  zoomInBtn.className = 'modal__zoom-btn';
+  zoomInBtn.textContent = '+';
+  const zoomResetBtn = document.createElement('button');
+  zoomResetBtn.type = 'button';
+  zoomResetBtn.className = 'modal__zoom-btn';
+  zoomResetBtn.textContent = '100%';
+  zoomControls.appendChild(zoomOutBtn);
+  zoomControls.appendChild(zoomInBtn);
+  zoomControls.appendChild(zoomResetBtn);
+  modalBody.appendChild(zoomControls);
   shell.appendChild(image);
   modalBody.appendChild(shell);
-  modalZoomCleanup = attachImageZoom(image);
+  modalZoomCleanup = attachImageZoom(image, {
+    zoomIn: zoomInBtn,
+    zoomOut: zoomOutBtn,
+    reset: zoomResetBtn
+  });
   modal.classList.add('open');
   modal.setAttribute('aria-hidden', 'false');
 };
