@@ -1,0 +1,4 @@
+site/assets/**
+site/data/*.json
+site/data/*.js
+!site/data/.gitkeep

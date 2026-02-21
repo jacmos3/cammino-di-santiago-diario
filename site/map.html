@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cammino di Santiago — Mappa</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+</head>
+<body>
+  <header class="hero">
+    <div class="hero__inner">
+      <div class="hero__top">
+        <div class="hero__title">
+          <span class="eyebrow">Mappa del percorso</span>
+          <h1>Cammino di Santiago</h1>
+          <p class="lead">Traccia ricavata dai metadati GPS delle foto e dei video.</p>
+        </div>
+        <div class="controls">
+          <a class="view-btn active" href="index.html">Torna al diario</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="content">
+    <div id="map" style="height: 70vh; border-radius: 18px; box-shadow: var(--shadow);"></div>
+  </main>
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script src="map.js"></script>
+</body>
+</html>
