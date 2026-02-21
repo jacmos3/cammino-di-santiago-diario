@@ -126,6 +126,9 @@ const modal = document.getElementById('live-modal');
 const modalBody = document.getElementById('live-modal-body');
 const modalClose = document.getElementById('live-modal-close');
 const modalBackdrop = document.getElementById('live-modal-backdrop');
+let modalImageItems = [];
+let modalImageIndexById = new Map();
+let modalImageIndex = -1;
 
 const attachImageZoom = (image, controls = null) => {
   let scale = 1;
@@ -272,12 +275,16 @@ const attachImageZoom = (image, controls = null) => {
   };
 };
 
-const openImageModal = (item) => {
+const openImageModal = (item, imageIndex = null) => {
   if (!item || !item.src) return;
   if (modalZoomCleanup) {
     modalZoomCleanup();
     modalZoomCleanup = null;
   }
+  const resolvedIndex = Number.isInteger(imageIndex)
+    ? imageIndex
+    : (item.id ? modalImageIndexById.get(item.id) : -1);
+  modalImageIndex = Number.isInteger(resolvedIndex) ? resolvedIndex : -1;
   modalBody.innerHTML = '';
   const shell = document.createElement('div');
   shell.className = 'modal__zoom-shell';
@@ -304,13 +311,49 @@ const openImageModal = (item) => {
   zoomControls.appendChild(zoomInBtn);
   zoomControls.appendChild(zoomResetBtn);
   modalBody.appendChild(zoomControls);
+  const cleanupFns = [];
+
+  if (modalImageItems.length > 1 && modalImageIndex >= 0) {
+    const nav = document.createElement('div');
+    nav.className = 'modal__nav';
+    const prevBtn = document.createElement('button');
+    prevBtn.type = 'button';
+    prevBtn.className = 'modal__nav-btn modal__nav-btn--prev';
+    prevBtn.setAttribute('aria-label', 'Foto precedente');
+    prevBtn.textContent = '‹';
+    const nextBtn = document.createElement('button');
+    nextBtn.type = 'button';
+    nextBtn.className = 'modal__nav-btn modal__nav-btn--next';
+    nextBtn.setAttribute('aria-label', 'Foto successiva');
+    nextBtn.textContent = '›';
+    nav.appendChild(prevBtn);
+    nav.appendChild(nextBtn);
+    modalBody.appendChild(nav);
+
+    const openByOffset = (offset) => {
+      const len = modalImageItems.length;
+      if (!len || modalImageIndex < 0) return;
+      const nextIndex = (modalImageIndex + offset + len) % len;
+      openImageModal(modalImageItems[nextIndex], nextIndex);
+    };
+    const onPrev = () => openByOffset(-1);
+    const onNext = () => openByOffset(1);
+    prevBtn.addEventListener('click', onPrev);
+    nextBtn.addEventListener('click', onNext);
+    cleanupFns.push(() => {
+      prevBtn.removeEventListener('click', onPrev);
+      nextBtn.removeEventListener('click', onNext);
+    });
+  }
+
   shell.appendChild(image);
   modalBody.appendChild(shell);
-  modalZoomCleanup = attachImageZoom(image, {
+  cleanupFns.push(attachImageZoom(image, {
     zoomIn: zoomInBtn,
     zoomOut: zoomOutBtn,
     reset: zoomResetBtn
-  });
+  }));
+  modalZoomCleanup = () => cleanupFns.forEach((fn) => fn && fn());
   modal.classList.add('open');
   modal.setAttribute('aria-hidden', 'false');
 };
@@ -321,6 +364,7 @@ const openVideoModal = (item) => {
     modalZoomCleanup();
     modalZoomCleanup = null;
   }
+  modalImageIndex = -1;
   modalBody.innerHTML = '';
   const video = document.createElement('video');
   video.controls = true;
@@ -346,12 +390,26 @@ const closeModal = () => {
   modal.classList.remove('open');
   modal.setAttribute('aria-hidden', 'true');
   modalBody.innerHTML = '';
+  modalImageIndex = -1;
 };
 
 modalClose.addEventListener('click', closeModal);
 modalBackdrop.addEventListener('click', closeModal);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeModal();
+  if (!modal.classList.contains('open')) return;
+  if (e.key === 'Escape') {
+    closeModal();
+    return;
+  }
+  if (modalImageIndex >= 0 && modalImageItems.length > 1) {
+    if (e.key === 'ArrowLeft') {
+      const nextIndex = (modalImageIndex - 1 + modalImageItems.length) % modalImageItems.length;
+      openImageModal(modalImageItems[nextIndex], nextIndex);
+    } else if (e.key === 'ArrowRight') {
+      const nextIndex = (modalImageIndex + 1) % modalImageItems.length;
+      openImageModal(modalImageItems[nextIndex], nextIndex);
+    }
+  }
 });
 
 const getNote = (day) => {
@@ -416,7 +474,8 @@ const buildDay = (day, idx, isPortfolio) => {
       img.alt = item.orig;
       img.src = item.src;
       card.appendChild(img);
-      img.addEventListener('click', () => openImageModal(item));
+      const imageIdx = item.id ? modalImageIndexById.get(item.id) : -1;
+      img.addEventListener('click', () => openImageModal(item, imageIdx));
     } else {
       const video = document.createElement('video');
       video.controls = true;
@@ -619,6 +678,11 @@ const renderView = () => {
   const data = dataCache;
   const list = currentView === 'portfolio' ? data.portfolio : data.days;
   renderedDayOrder = list.map((day) => day.date);
+  modalImageItems = list.flatMap((day) => (day.items || []).filter((item) => item.type === 'image'));
+  modalImageIndexById = new Map();
+  modalImageItems.forEach((item, idx) => {
+    if (item.id) modalImageIndexById.set(item.id, idx);
+  });
 
   const content = document.getElementById('content');
   content.innerHTML = '';

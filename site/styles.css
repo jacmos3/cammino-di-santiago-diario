@@ -531,6 +531,29 @@ h1, h2, h3 {
   cursor: not-allowed;
 }
 
+.modal__nav {
+  position: absolute;
+  inset: 50% 10px auto 10px;
+  transform: translateY(-50%);
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.modal__nav-btn {
+  pointer-events: auto;
+  border: 1px solid rgba(31, 26, 22, 0.2);
+  background: rgba(255, 250, 242, 0.95);
+  color: var(--ink);
+  border-radius: 999px;
+  width: 42px;
+  height: 42px;
+  font-size: 1.7rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .modal__image.is-zoomed {
   cursor: grab;
 }
