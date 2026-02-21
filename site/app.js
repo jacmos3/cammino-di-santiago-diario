@@ -119,18 +119,30 @@ const modalBody = document.getElementById('live-modal-body');
 const modalClose = document.getElementById('live-modal-close');
 const modalBackdrop = document.getElementById('live-modal-backdrop');
 
-const openModal = (item) => {
-  if (!item.live_video) return;
+const openImageModal = (item) => {
+  if (!item || !item.src) return;
+  modalBody.innerHTML = '';
+  const image = document.createElement('img');
+  image.src = item.src;
+  image.alt = item.orig || '';
+  image.className = 'modal__image';
+  modalBody.appendChild(image);
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+};
+
+const openVideoModal = (item) => {
+  if (!item || !item.src) return;
   modalBody.innerHTML = '';
   const video = document.createElement('video');
   video.controls = true;
   video.autoplay = true;
   video.playsInline = true;
   video.preload = 'metadata';
-  if (item.src) video.poster = item.src;
+  if (item.poster) video.poster = item.poster;
   const source = document.createElement('source');
-  source.src = item.live_video;
-  source.type = item.live_mime || 'video/mp4';
+  source.src = item.src;
+  source.type = item.mime || 'video/mp4';
   video.appendChild(source);
   modalBody.appendChild(video);
   modal.classList.add('open');
@@ -207,15 +219,12 @@ const buildDay = (day, idx, isPortfolio) => {
     card.className = 'media-card';
 
     if (item.type === 'image') {
-      if (item.live_video) card.classList.add('live');
       const img = document.createElement('img');
       img.loading = 'lazy';
       img.alt = item.orig;
       img.src = item.src;
       card.appendChild(img);
-      if (item.live_video) {
-        img.addEventListener('click', () => openModal(item));
-      }
+      img.addEventListener('click', () => openImageModal(item));
     } else {
       const video = document.createElement('video');
       video.controls = true;
@@ -226,18 +235,15 @@ const buildDay = (day, idx, isPortfolio) => {
       source.src = item.src;
       source.type = item.mime || 'video/mp4';
       video.appendChild(source);
+      video.addEventListener('click', () => openVideoModal(item));
       card.appendChild(video);
     }
 
     const tag = document.createElement('div');
     tag.className = 'media-tag';
-    const tagType = item.type === 'image'
-      ? (item.live_video ? 'live' : 'photo')
-      : 'video';
+    const tagType = item.type === 'image' ? 'photo' : 'video';
     tag.setAttribute('data-tag', tagType);
-    tag.textContent = item.type === 'image'
-      ? (item.live_video ? I18N[currentLang].live_tag : I18N[currentLang].photo_tag)
-      : I18N[currentLang].video_tag;
+    tag.textContent = item.type === 'image' ? I18N[currentLang].photo_tag : I18N[currentLang].video_tag;
     card.appendChild(tag);
 
     grid.appendChild(card);
@@ -381,8 +387,6 @@ const init = async () => {
     document.getElementById('stat-days').textContent = data.days.length;
     document.getElementById('stat-photos').textContent = data.counts.images;
     document.getElementById('stat-videos').textContent = data.counts.videos;
-    const liveEl = document.getElementById('stat-live');
-    if (liveEl) liveEl.textContent = data.counts.live || 0;
     document.getElementById('footer-meta').textContent = `Updated ${data.generated_at}`;
 
     renderView();
