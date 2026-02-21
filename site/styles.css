@@ -382,6 +382,23 @@ h1, h2, h3 {
   gap: 8px;
 }
 
+.mini-map__open {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.82rem;
+  color: #fffaf2;
+  background: var(--accent-2);
+  text-decoration: none;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.mini-map__open:hover {
+  filter: brightness(1.05);
+}
+
 .mini-map__date {
   font-size: 0.8rem;
   color: var(--muted);
@@ -477,6 +494,23 @@ h1, h2, h3 {
   height: auto;
   object-fit: contain;
   border-radius: 12px;
+  touch-action: none;
+  transform-origin: center center;
+  cursor: zoom-in;
+  user-select: none;
+}
+
+.modal__zoom-shell {
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.modal__image.is-zoomed {
+  cursor: grab;
+}
+
+.modal__image.is-dragging {
+  cursor: grabbing;
 }
 
 .reveal {

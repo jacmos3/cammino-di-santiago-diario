@@ -6,19 +6,18 @@ const I18N = {
     days: 'Giorni',
     photos: 'Foto',
     videos: 'Video',
-    live: 'Live',
     loading: 'Sto preparando il diario…',
     day_label: 'Giorno',
     items_label: 'contenuti',
     photo_tag: 'Foto',
     video_tag: 'Video',
-    live_tag: 'Live',
     footer_note: 'Creato automaticamente a partire dagli scatti originali.',
     view_diary: 'Diario',
     view_portfolio: 'Portfolio',
     notes_label: 'Note del giorno',
     empty_note: 'Aggiungi un ricordo personale qui.',
     mini_map: 'Percorso del giorno',
+    open_map: 'Apri la mappa',
     mini_map_empty: 'Nessun GPS per questo giorno.'
   },
   en: {
@@ -28,19 +27,18 @@ const I18N = {
     days: 'Days',
     photos: 'Photos',
     videos: 'Videos',
-    live: 'Live',
     loading: 'Preparing the diary…',
     day_label: 'Day',
     items_label: 'items',
     photo_tag: 'Photo',
     video_tag: 'Video',
-    live_tag: 'Live',
     footer_note: 'Automatically generated from the original shots.',
     view_diary: 'Diary',
     view_portfolio: 'Portfolio',
     notes_label: 'Day notes',
     empty_note: 'Add a personal memory here.',
     mini_map: 'Daily route',
+    open_map: 'Open map',
     mini_map_empty: 'No GPS for this day.'
   }
 };
@@ -68,6 +66,18 @@ let trackByDay = null;
 let miniMap = null;
 let miniLayer = null;
 let cleanupSectionSync = null;
+let renderedDayOrder = [];
+let modalZoomCleanup = null;
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const PHOTO_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp']);
+
+const isPhotoTrackPoint = (point) => {
+  const file = (point && point.file ? String(point.file) : '').trim().toLowerCase();
+  if (!file.includes('.')) return true;
+  const ext = file.split('.').pop();
+  return PHOTO_EXTENSIONS.has(ext);
+};
 
 const formatDate = (dateStr) => {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -97,9 +107,6 @@ const renderDates = () => {
   document.querySelectorAll('[data-tag="video"]').forEach((el) => {
     el.textContent = I18N[currentLang].video_tag;
   });
-  document.querySelectorAll('[data-tag="live"]').forEach((el) => {
-    el.textContent = I18N[currentLang].live_tag;
-  });
   document.querySelectorAll('[data-day-label]').forEach((el) => {
     const idx = el.getAttribute('data-day-label');
     el.textContent = `${I18N[currentLang].day_label} ${idx}`;
@@ -120,20 +127,157 @@ const modalBody = document.getElementById('live-modal-body');
 const modalClose = document.getElementById('live-modal-close');
 const modalBackdrop = document.getElementById('live-modal-backdrop');
 
+const attachImageZoom = (image) => {
+  let scale = 1;
+  let tx = 0;
+  let ty = 0;
+  let isDragging = false;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let startTx = 0;
+  let startTy = 0;
+  let activePointerId = null;
+  const pointers = new Map();
+  let pinchStartDistance = 0;
+  let pinchStartScale = 1;
+
+  const getPanLimits = () => {
+    const maxX = (image.clientWidth * (scale - 1)) / 2;
+    const maxY = (image.clientHeight * (scale - 1)) / 2;
+    return { maxX, maxY };
+  };
+
+  const applyTransform = () => {
+    const { maxX, maxY } = getPanLimits();
+    tx = clamp(tx, -maxX, maxX);
+    ty = clamp(ty, -maxY, maxY);
+    image.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    image.classList.toggle('is-zoomed', scale > 1.001);
+  };
+
+  const zoomTo = (nextScale) => {
+    scale = clamp(nextScale, 1, 5);
+    if (scale <= 1.001) {
+      tx = 0;
+      ty = 0;
+    }
+    applyTransform();
+  };
+
+  const pointerDistance = () => {
+    const pts = Array.from(pointers.values());
+    if (pts.length < 2) return 0;
+    const dx = pts[0].x - pts[1].x;
+    const dy = pts[0].y - pts[1].y;
+    return Math.hypot(dx, dy);
+  };
+
+  const onWheel = (event) => {
+    event.preventDefault();
+    const factor = Math.exp(-event.deltaY * 0.0015);
+    zoomTo(scale * factor);
+  };
+
+  const onDoubleClick = (event) => {
+    event.preventDefault();
+    zoomTo(scale > 1.1 ? 1 : 2);
+  };
+
+  const onPointerDown = (event) => {
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size === 2) {
+      pinchStartDistance = pointerDistance();
+      pinchStartScale = scale;
+      isDragging = false;
+      activePointerId = null;
+      image.classList.remove('is-dragging');
+      return;
+    }
+    if (scale <= 1.001) return;
+    activePointerId = event.pointerId;
+    isDragging = true;
+    dragStartX = event.clientX;
+    dragStartY = event.clientY;
+    startTx = tx;
+    startTy = ty;
+    image.setPointerCapture(event.pointerId);
+    image.classList.add('is-dragging');
+  };
+
+  const onPointerMove = (event) => {
+    if (pointers.has(event.pointerId)) {
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+    if (pointers.size >= 2 && pinchStartDistance > 0) {
+      const distance = pointerDistance();
+      if (distance > 0) zoomTo(pinchStartScale * (distance / pinchStartDistance));
+      return;
+    }
+    if (!isDragging || event.pointerId !== activePointerId) return;
+    tx = startTx + (event.clientX - dragStartX);
+    ty = startTy + (event.clientY - dragStartY);
+    applyTransform();
+  };
+
+  const endDragging = (event) => {
+    if (event) pointers.delete(event.pointerId);
+    if (pointers.size < 2) {
+      pinchStartDistance = 0;
+      pinchStartScale = scale;
+    }
+    if (event && activePointerId !== event.pointerId) return;
+    isDragging = false;
+    activePointerId = null;
+    image.classList.remove('is-dragging');
+  };
+
+  image.addEventListener('wheel', onWheel, { passive: false });
+  image.addEventListener('dblclick', onDoubleClick);
+  image.addEventListener('pointerdown', onPointerDown);
+  image.addEventListener('pointermove', onPointerMove);
+  image.addEventListener('pointerup', endDragging);
+  image.addEventListener('pointercancel', endDragging);
+  image.addEventListener('pointerleave', endDragging);
+
+  applyTransform();
+
+  return () => {
+    image.removeEventListener('wheel', onWheel);
+    image.removeEventListener('dblclick', onDoubleClick);
+    image.removeEventListener('pointerdown', onPointerDown);
+    image.removeEventListener('pointermove', onPointerMove);
+    image.removeEventListener('pointerup', endDragging);
+    image.removeEventListener('pointercancel', endDragging);
+    image.removeEventListener('pointerleave', endDragging);
+  };
+};
+
 const openImageModal = (item) => {
   if (!item || !item.src) return;
+  if (modalZoomCleanup) {
+    modalZoomCleanup();
+    modalZoomCleanup = null;
+  }
   modalBody.innerHTML = '';
+  const shell = document.createElement('div');
+  shell.className = 'modal__zoom-shell';
   const image = document.createElement('img');
   image.src = item.src;
   image.alt = item.orig || '';
   image.className = 'modal__image';
-  modalBody.appendChild(image);
+  shell.appendChild(image);
+  modalBody.appendChild(shell);
+  modalZoomCleanup = attachImageZoom(image);
   modal.classList.add('open');
   modal.setAttribute('aria-hidden', 'false');
 };
 
 const openVideoModal = (item) => {
   if (!item || !item.src) return;
+  if (modalZoomCleanup) {
+    modalZoomCleanup();
+    modalZoomCleanup = null;
+  }
   modalBody.innerHTML = '';
   const video = document.createElement('video');
   video.controls = true;
@@ -152,6 +296,10 @@ const openVideoModal = (item) => {
 
 const closeModal = () => {
   if (!modal.classList.contains('open')) return;
+  if (modalZoomCleanup) {
+    modalZoomCleanup();
+    modalZoomCleanup = null;
+  }
   modal.classList.remove('open');
   modal.setAttribute('aria-hidden', 'true');
   modalBody.innerHTML = '';
@@ -294,12 +442,22 @@ const ensureMiniMap = () => {
   return miniMap;
 };
 
-const renderMiniMap = (dayKey) => {
+const renderMiniMap = (dayKey, dayIndex = null) => {
   try {
     const body = document.getElementById('mini-map-body');
     const dateEl = document.getElementById('mini-map-date');
     if (dateEl) dateEl.textContent = formatDate(dayKey);
-    if (!trackByDay || !trackByDay[dayKey] || trackByDay[dayKey].length === 0) {
+
+    const hasIndex = Number.isInteger(dayIndex) && dayIndex >= 0 && dayIndex < renderedDayOrder.length;
+    const dayKeysToDraw = hasIndex ? renderedDayOrder.slice(0, dayIndex + 1) : [dayKey];
+
+    const dayTracks = [];
+    dayKeysToDraw.forEach((key) => {
+      const pts = ((trackByDay && trackByDay[key]) || []).filter(isPhotoTrackPoint);
+      if (pts.length) dayTracks.push(pts);
+    });
+
+    if (!dayTracks.length) {
       if (body) {
         body.classList.add('is-empty');
         body.setAttribute('data-empty-message', I18N[currentLang].mini_map_empty);
@@ -314,14 +472,30 @@ const renderMiniMap = (dayKey) => {
     const map = ensureMiniMap();
     if (!map) return;
     miniLayer.clearLayers();
-    const pts = trackByDay[dayKey];
-    const latlngs = pts.map((p) => [p.lat, p.lon]);
-    const line = L.polyline(latlngs, { color: '#b06c36', weight: 3, opacity: 0.9 });
-    line.addTo(miniLayer);
-    latlngs.forEach((ll) => {
-      L.circleMarker(ll, { radius: 3, color: '#1f5f5b', weight: 1, fillOpacity: 0.8 }).addTo(miniLayer);
+
+    let bounds = null;
+    dayTracks.forEach((pts, idx) => {
+      const isCurrent = idx === dayTracks.length - 1;
+      const latlngs = pts.map((p) => [p.lat, p.lon]);
+      const line = L.polyline(latlngs, {
+        color: isCurrent ? '#b06c36' : '#cfa782',
+        weight: isCurrent ? 3 : 2,
+        opacity: isCurrent ? 0.9 : 0.6
+      });
+      line.addTo(miniLayer);
+      latlngs.forEach((ll) => {
+        L.circleMarker(ll, {
+          radius: isCurrent ? 3 : 2.5,
+          color: '#1f5f5b',
+          weight: 1,
+          fillOpacity: isCurrent ? 0.85 : 0.45
+        }).addTo(miniLayer);
+      });
+      bounds = bounds ? bounds.extend(line.getBounds()) : line.getBounds();
     });
-    map.fitBounds(line.getBounds(), { padding: [10, 10], animate: false });
+    if (bounds && bounds.isValid()) {
+      map.fitBounds(bounds, { padding: [10, 10], animate: false });
+    }
   } catch (err) {
     const body = document.getElementById('mini-map-body');
     if (body) {
@@ -361,7 +535,7 @@ const observeSections = () => {
     buttons.forEach((btn, i) => btn.classList.toggle('active', i === idx));
     ensureVisible(buttons[idx]);
     const dayKey = sections[idx].id.replace('day-', '');
-    renderMiniMap(dayKey);
+    renderMiniMap(dayKey, idx);
   };
 
   const pickIndexFromScroll = () => {
@@ -401,6 +575,7 @@ const observeSections = () => {
 const renderView = () => {
   const data = dataCache;
   const list = currentView === 'portfolio' ? data.portfolio : data.days;
+  renderedDayOrder = list.map((day) => day.date);
 
   const content = document.getElementById('content');
   content.innerHTML = '';
@@ -441,7 +616,7 @@ const init = async () => {
       .then((json) => {
         trackByDay = json || null;
         if (data.days.length) {
-          renderMiniMap(data.days[0].date);
+          renderMiniMap(data.days[0].date, 0);
         }
       })
       .catch(() => {
