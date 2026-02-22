@@ -27,7 +27,8 @@ const I18N = {
     delete_confirm: 'Confermi la cancellazione definitiva di {count} file?',
     delete_success: '{count} file cancellati.',
     delete_error: 'Errore durante la cancellazione',
-    deleting: 'Cancellazione...'
+    deleting: 'Cancellazione...',
+    carousel: 'Carosello'
   },
   en: {
     eyebrow: 'Travel diary',
@@ -57,7 +58,8 @@ const I18N = {
     delete_confirm: 'Confirm permanent deletion of {count} files?',
     delete_success: '{count} files deleted.',
     delete_error: 'Delete failed',
-    deleting: 'Deleting...'
+    deleting: 'Deleting...',
+    carousel: 'Carousel'
   }
 };
 
@@ -96,6 +98,40 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const PHOTO_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp']);
 const IMG_PLACEHOLDER =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+const IS_FIREFOX =
+  typeof navigator !== 'undefined' &&
+  /firefox/i.test(String(navigator.userAgent || ''));
+const firefoxHydrationQueue = [];
+let firefoxHydrationDrainTimer = null;
+
+const queueFirefoxHydration = (el, highPriority = false) => {
+  if (!el || !el.dataset || !el.dataset.src) return;
+  if (el.dataset.ffQueued === '1') return;
+  el.dataset.ffQueued = '1';
+  if (highPriority) firefoxHydrationQueue.unshift(el);
+  else firefoxHydrationQueue.push(el);
+  if (firefoxHydrationDrainTimer) return;
+  const drain = () => {
+    let budget = 10;
+    while (budget > 0 && firefoxHydrationQueue.length > 0) {
+      const next = firefoxHydrationQueue.shift();
+      if (next && next.dataset) next.dataset.ffQueued = '0';
+      if (next) hydrateLazyMedia(next);
+      budget -= 1;
+    }
+    if (firefoxHydrationQueue.length > 0) {
+      firefoxHydrationDrainTimer = window.setTimeout(drain, 40);
+    } else {
+      firefoxHydrationDrainTimer = null;
+    }
+  };
+  firefoxHydrationDrainTimer = window.setTimeout(drain, 10);
+};
+const withCacheBust = (url, token) => {
+  if (!url) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}v=${encodeURIComponent(String(token))}`;
+};
 
 const isPhotoTrackPoint = (point) => {
   const file = (point && point.file ? String(point.file) : '').trim().toLowerCase();
@@ -160,6 +196,13 @@ const disconnectLazyMediaObserver = () => {
   }
 };
 
+const isNearViewport = (el, margin = 700) => {
+  if (!el || typeof el.getBoundingClientRect !== 'function') return false;
+  const rect = el.getBoundingClientRect();
+  const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+  return rect.bottom >= -margin && rect.top <= vh + margin;
+};
+
 const hydrateLazyMedia = (el) => {
   if (!el) return;
   if (el.tagName === 'IMG') {
@@ -207,6 +250,14 @@ const ensureLazyMediaObserver = () => {
 };
 
 const registerLazyMedia = (el) => {
+  if (IS_FIREFOX) {
+    queueFirefoxHydration(el, isNearViewport(el, 900));
+    return;
+  }
+  if (isNearViewport(el, 700)) {
+    hydrateLazyMedia(el);
+    return;
+  }
   const observer = ensureLazyMediaObserver();
   if (!observer) {
     hydrateLazyMedia(el);
@@ -215,13 +266,106 @@ const registerLazyMedia = (el) => {
   observer.observe(el);
 };
 
+const recoverVisibleLazyMedia = () => {
+  const pending = document.querySelectorAll('img[data-src], video[data-src]');
+  if (!pending.length) return;
+  let hydrated = 0;
+  pending.forEach((el) => {
+    if (hydrated >= 36) return;
+    if (!isNearViewport(el, 900)) return;
+    if (IS_FIREFOX) queueFirefoxHydration(el, true);
+    else hydrateLazyMedia(el);
+    hydrated += 1;
+  });
+};
+
 const modal = document.getElementById('live-modal');
 const modalBody = document.getElementById('live-modal-body');
 const modalClose = document.getElementById('live-modal-close');
 const modalBackdrop = document.getElementById('live-modal-backdrop');
 let modalItems = [];
 let modalIndexById = new Map();
+let modalGroupByItemId = new Map();
 let modalIndex = -1;
+
+const getModalPreviewSrc = (item) => {
+  if (!item) return '';
+  if (item.type === 'video') return item.poster || item.thumb || item.src || '';
+  return item.thumb || item.src || '';
+};
+
+const appendModalGroupPanel = (currentItem) => {
+  if (!currentItem || !currentItem.id) return;
+  const group = modalGroupByItemId.get(String(currentItem.id));
+  if (!group || group.length < 2) return;
+
+  const panel = document.createElement('div');
+  panel.className = 'modal__group-panel';
+  const title = document.createElement('div');
+  title.className = 'modal__group-title';
+  title.textContent = I18N[currentLang].carousel || 'Carosello';
+  panel.appendChild(title);
+
+  const list = document.createElement('div');
+  list.className = 'modal__group-list';
+  list.setAttribute('role', 'listbox');
+  group.forEach((groupItem) => {
+    const thumbSrc = getModalPreviewSrc(groupItem);
+    if (!thumbSrc) return;
+    const row = document.createElement('div');
+    row.className = 'modal__group-row';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'modal__group-item';
+    btn.setAttribute('role', 'option');
+    btn.setAttribute('aria-label', groupItem.orig || 'Elemento carosello');
+    btn.dataset.itemId = String(groupItem.id || '');
+    if (String(groupItem.id) === String(currentItem.id)) {
+      btn.classList.add('is-active');
+      btn.setAttribute('aria-selected', 'true');
+    } else {
+      btn.setAttribute('aria-selected', 'false');
+    }
+    const img = document.createElement('img');
+    img.className = 'modal__group-thumb';
+    img.src = thumbSrc;
+    img.alt = groupItem.orig || '';
+    btn.appendChild(img);
+    btn.addEventListener('click', () => {
+      list.querySelectorAll('.modal__group-item').forEach((el) => {
+        el.classList.remove('is-active');
+        el.setAttribute('aria-selected', 'false');
+      });
+      btn.classList.add('is-active');
+      btn.setAttribute('aria-selected', 'true');
+      const idx = groupItem.id ? modalIndexById.get(groupItem.id) : -1;
+      openModalItem(groupItem, idx);
+    });
+    row.appendChild(btn);
+
+    if (groupItem.id) {
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'modal__group-delete';
+      deleteBtn.setAttribute('aria-label', 'Cancella questo elemento');
+      deleteBtn.title = 'Cancella questo elemento';
+      deleteBtn.textContent = '×';
+      deleteBtn.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const ok = window.confirm(formatI18N('delete_confirm', { count: 1 }));
+        if (!ok) return;
+        await deleteItemsByIds([String(groupItem.id)], { closeModalAfter: true, showSuccessAlert: false });
+      });
+      row.appendChild(deleteBtn);
+    }
+
+    list.appendChild(row);
+  });
+
+  panel.appendChild(list);
+  modalBody.appendChild(panel);
+};
 
 const attachImageZoom = (image, controls = null) => {
   let scale = 1;
@@ -285,7 +429,9 @@ const attachImageZoom = (image, controls = null) => {
   };
   const onZoomInClick = () => zoomTo(scale * ZOOM_STEP);
   const onZoomOutClick = () => zoomTo(scale / ZOOM_STEP);
-  const onResetClick = () => zoomTo(1);
+  const onResetClick = () => {
+    zoomTo(1);
+  };
 
   const onPointerDown = (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
@@ -407,9 +553,16 @@ const openImageModal = (item, itemIndex = null) => {
   zoomResetBtn.type = 'button';
   zoomResetBtn.className = 'modal__zoom-btn';
   zoomResetBtn.textContent = '100%';
+  const rotateBtn = document.createElement('button');
+  rotateBtn.type = 'button';
+  rotateBtn.className = 'modal__zoom-btn';
+  rotateBtn.textContent = '↻';
+  rotateBtn.setAttribute('aria-label', 'Ruota foto');
+  if (!item.id) rotateBtn.disabled = true;
   zoomControls.appendChild(zoomOutBtn);
   zoomControls.appendChild(zoomInBtn);
   zoomControls.appendChild(zoomResetBtn);
+  zoomControls.appendChild(rotateBtn);
   modalBody.appendChild(zoomControls);
   const cleanupFns = [];
 
@@ -448,11 +601,47 @@ const openImageModal = (item, itemIndex = null) => {
 
   shell.appendChild(image);
   modalBody.appendChild(shell);
+  appendModalGroupPanel(item);
   cleanupFns.push(attachImageZoom(image, {
     zoomIn: zoomInBtn,
     zoomOut: zoomOutBtn,
     reset: zoomResetBtn
   }));
+  const onRotate = async () => {
+    if (!item.id || rotateBtn.disabled) return;
+    rotateBtn.disabled = true;
+    try {
+      const res = await fetch('/api/rotate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: String(item.id), degrees: 90 })
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      const payload = await res.json();
+      const cacheBust = payload && payload.cache_bust ? payload.cache_bust : Date.now();
+      const modalBase = item.src || item.thumb || '';
+      if (modalBase) image.src = withCacheBust(modalBase, cacheBust);
+      if (item.id) {
+        document.querySelectorAll('img[data-item-id]').forEach((imgEl) => {
+          if (imgEl.dataset.itemId !== String(item.id)) return;
+          const base = imgEl.dataset.src || item.thumb || item.src || '';
+          if (!base) return;
+          const busted = withCacheBust(base, cacheBust);
+          imgEl.dataset.src = busted;
+          imgEl.src = busted;
+        });
+      }
+    } catch (err) {
+      window.alert(`Errore rotazione: ${err.message || err}`);
+    } finally {
+      rotateBtn.disabled = false;
+    }
+  };
+  rotateBtn.addEventListener('click', onRotate);
+  cleanupFns.push(() => rotateBtn.removeEventListener('click', onRotate));
   modalZoomCleanup = () => cleanupFns.forEach((fn) => fn && fn());
   modal.classList.add('open');
   modal.setAttribute('aria-hidden', 'false');
@@ -480,6 +669,7 @@ const openVideoModal = (item, itemIndex = null) => {
   source.type = item.mime || 'video/mp4';
   video.appendChild(source);
   modalBody.appendChild(video);
+  appendModalGroupPanel(item);
 
   if (modalItems.length > 1 && modalIndex >= 0) {
     const nav = document.createElement('div');
@@ -590,12 +780,13 @@ const toggleSelectionMode = () => {
   renderView();
 };
 
-const deleteSelectedItems = async () => {
-  if (deleteInFlight || selectedIds.size === 0) return;
-  const count = selectedIds.size;
-  const accepted = window.confirm(formatI18N('delete_confirm', { count }));
-  if (!accepted) return;
-
+const deleteItemsByIds = async (ids, options = {}) => {
+  const {
+    closeModalAfter = false,
+    showSuccessAlert = true
+  } = options;
+  const uniqueIds = Array.from(new Set((ids || []).map((id) => String(id)).filter(Boolean)));
+  if (deleteInFlight || uniqueIds.length === 0) return false;
   deleteInFlight = true;
   renderManageTools();
   const deleteBtn = document.getElementById('delete-selected');
@@ -605,7 +796,7 @@ const deleteSelectedItems = async () => {
     const response = await fetch('/api/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: Array.from(selectedIds) })
+      body: JSON.stringify({ ids: uniqueIds })
     });
     if (!response.ok) {
       const detail = await response.text();
@@ -619,16 +810,29 @@ const deleteSelectedItems = async () => {
       const reload = await fetch(`data/entries.json?t=${Date.now()}`, { cache: 'no-store' });
       dataCache = await reload.json();
     }
-    selectedIds.clear();
+    uniqueIds.forEach((id) => selectedIds.delete(id));
+    if (closeModalAfter) closeModal();
     refreshStats();
     renderView();
-    window.alert(formatI18N('delete_success', { count: payload.removed || count }));
+    if (showSuccessAlert) {
+      window.alert(formatI18N('delete_success', { count: payload.removed || uniqueIds.length }));
+    }
+    return true;
   } catch (err) {
     window.alert(`${I18N[currentLang].delete_error}: ${err.message || err}`);
+    return false;
   } finally {
     deleteInFlight = false;
     renderManageTools();
   }
+};
+
+const deleteSelectedItems = async () => {
+  if (deleteInFlight || selectedIds.size === 0) return;
+  const count = selectedIds.size;
+  const accepted = window.confirm(formatI18N('delete_confirm', { count }));
+  if (!accepted) return;
+  await deleteItemsByIds(Array.from(selectedIds), { closeModalAfter: true, showSuccessAlert: true });
 };
 
 modalClose.addEventListener('click', closeModal);
@@ -655,10 +859,74 @@ const getNote = (day) => {
   return (currentLang === 'it' ? note.it : note.en) || '';
 };
 
-const buildMediaCard = (item) => {
+const parseItemTimestamp = (item) => {
+  const date = String(item && item.date ? item.date : '').trim();
+  const time = String(item && item.time ? item.time : '').trim();
+  if (!date || !time) return Number.NaN;
+  const parts = time.split(':').map(Number);
+  const hh = Number.isFinite(parts[0]) ? parts[0] : 0;
+  const mm = Number.isFinite(parts[1]) ? parts[1] : 0;
+  return new Date(`${date}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00`).getTime();
+};
+
+const parseOrigSequence = (orig) => {
+  const name = String(orig || '').toUpperCase();
+  const match = name.match(/IMG_(\d+)/);
+  return match ? Number(match[1]) : Number.NaN;
+};
+
+const shouldGroupAsBurst = (prev, curr) => {
+  if (!prev || !curr) return false;
+  if (prev.type !== curr.type) return false;
+  if (prev.date !== curr.date) return false;
+  const prevTs = parseItemTimestamp(prev);
+  const currTs = parseItemTimestamp(curr);
+  if (!Number.isFinite(prevTs) || !Number.isFinite(currTs)) return false;
+  if (Math.abs(currTs - prevTs) > 90 * 1000) return false;
+
+  const prevSeq = parseOrigSequence(prev.orig);
+  const currSeq = parseOrigSequence(curr.orig);
+  if (Number.isFinite(prevSeq) && Number.isFinite(currSeq)) {
+    return Math.abs(currSeq - prevSeq) <= 3;
+  }
+  return true;
+};
+
+const groupDayItems = (items) => {
+  const groups = [];
+  let current = [];
+  (items || []).forEach((item) => {
+    if (!current.length) {
+      current = [item];
+      return;
+    }
+    const prev = current[current.length - 1];
+    if (shouldGroupAsBurst(prev, item)) {
+      current.push(item);
+      return;
+    }
+    groups.push(current);
+    current = [item];
+  });
+  if (current.length) groups.push(current);
+  return groups;
+};
+
+const getGroupThumbSrc = (item) => {
+  if (!item) return '';
+  if (item.type === 'video') return item.poster || item.thumb || '';
+  return item.thumb || item.src || '';
+};
+
+const buildMediaCard = (groupItems) => {
+  const items = Array.isArray(groupItems) && groupItems.length ? groupItems : [];
+  const item = items[0];
+  if (!item) return document.createElement('div');
   const card = document.createElement('div');
   card.className = 'media-card';
-  const itemSelected = item.id ? selectedIds.has(item.id) : false;
+  const itemIds = items.map((it) => String(it.id || '')).filter(Boolean);
+  const selectedCount = itemIds.filter((id) => selectedIds.has(id)).length;
+  const itemSelected = selectedCount > 0;
   const selectBtn = document.createElement('button');
   selectBtn.type = 'button';
   selectBtn.className = 'media-select';
@@ -667,13 +935,25 @@ const buildMediaCard = (item) => {
   selectBtn.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    toggleSelectionById(item.id, card, selectBtn);
+    const beforeCount = itemIds.filter((id) => selectedIds.has(id)).length;
+    const shouldSelectAll = beforeCount !== itemIds.length;
+    itemIds.forEach((id) => {
+      if (shouldSelectAll) selectedIds.add(id);
+      else selectedIds.delete(id);
+    });
+    const afterCount = itemIds.filter((id) => selectedIds.has(id)).length;
+    setCardSelectedState(card, selectBtn, afterCount > 0);
+    if (afterCount > 0 && afterCount < itemIds.length) {
+      selectBtn.textContent = String(afterCount);
+    }
+    renderManageTools();
   });
 
   if (item.type === 'image') {
     const img = document.createElement('img');
     img.loading = 'lazy';
     img.alt = item.orig;
+    if (item.id) img.dataset.itemId = String(item.id);
     img.src = IMG_PLACEHOLDER;
     img.dataset.src = item.thumb || item.src;
     img.decoding = 'async';
@@ -691,27 +971,56 @@ const buildMediaCard = (item) => {
       openImageModal(item, itemIdx);
     });
   } else {
-    const video = document.createElement('video');
-    video.controls = true;
-    video.preload = 'none';
-    video.playsInline = true;
-    if (item.poster) {
-      video.dataset.poster = item.poster;
-    }
-    video.dataset.src = item.src;
-    const source = document.createElement('source');
-    source.type = item.mime || 'video/mp4';
-    video.appendChild(source);
-    registerLazyMedia(video);
+    card.classList.add('media-card--video');
     const itemIdx = item.id ? modalIndexById.get(item.id) : -1;
-    video.addEventListener('click', () => {
-      openVideoModal(item, itemIdx);
-    });
-    card.appendChild(video);
+    if (IS_FIREFOX) {
+      const posterImg = document.createElement('img');
+      posterImg.loading = 'lazy';
+      posterImg.alt = item.orig || 'Video';
+      posterImg.src = IMG_PLACEHOLDER;
+      posterImg.dataset.src = item.poster || item.thumb || item.src;
+      posterImg.decoding = 'async';
+      posterImg.addEventListener('error', () => {
+        posterImg.src = IMG_PLACEHOLDER;
+      });
+      registerLazyMedia(posterImg);
+      posterImg.addEventListener('click', () => {
+        openVideoModal(item, itemIdx);
+      });
+      card.appendChild(posterImg);
+    } else {
+      const video = document.createElement('video');
+      video.controls = true;
+      video.preload = 'none';
+      video.playsInline = true;
+      if (item.poster) {
+        video.dataset.poster = item.poster;
+      }
+      video.dataset.src = item.src;
+      const source = document.createElement('source');
+      source.type = item.mime || 'video/mp4';
+      video.appendChild(source);
+      registerLazyMedia(video);
+      video.addEventListener('click', () => {
+        openVideoModal(item, itemIdx);
+      });
+      card.appendChild(video);
+    }
+  }
+
+  if (item.type === 'video') {
+    const playIndicator = document.createElement('div');
+    playIndicator.className = 'media-play-indicator';
+    playIndicator.setAttribute('aria-hidden', 'true');
+    playIndicator.textContent = '▶';
+    card.appendChild(playIndicator);
   }
 
   card.appendChild(selectBtn);
   setCardSelectedState(card, selectBtn, itemSelected);
+  if (selectedCount > 0 && selectedCount < itemIds.length) {
+    selectBtn.textContent = String(selectedCount);
+  }
 
   const tag = document.createElement('div');
   tag.className = 'media-tag';
@@ -719,6 +1028,49 @@ const buildMediaCard = (item) => {
   tag.setAttribute('data-tag', tagType);
   tag.textContent = item.type === 'image' ? I18N[currentLang].photo_tag : I18N[currentLang].video_tag;
   card.appendChild(tag);
+  if (items.length > 1) {
+    card.classList.add('media-card--group');
+    const burst = document.createElement('div');
+    burst.className = 'media-burst';
+    burst.textContent = `+${items.length - 1}`;
+    card.appendChild(burst);
+
+    const strip = document.createElement('div');
+    strip.className = 'media-strip';
+    const thumbsWrap = document.createElement('div');
+    thumbsWrap.className = 'media-strip__thumbs';
+    items.slice(1, 5).forEach((subItem) => {
+      const thumbSrc = getGroupThumbSrc(subItem);
+      if (!thumbSrc) return;
+      const thumbBtn = document.createElement('button');
+      thumbBtn.type = 'button';
+      thumbBtn.className = 'media-strip__thumb-btn';
+      const thumbImg = document.createElement('img');
+      thumbImg.className = 'media-strip__thumb-img';
+      thumbImg.loading = 'lazy';
+      thumbImg.decoding = 'async';
+      thumbImg.alt = subItem.orig || '';
+      thumbImg.src = thumbSrc;
+      thumbBtn.appendChild(thumbImg);
+      thumbBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const subIdx = subItem.id ? modalIndexById.get(subItem.id) : -1;
+        openModalItem(subItem, subIdx);
+      });
+      thumbsWrap.appendChild(thumbBtn);
+    });
+
+    if (items.length > 5) {
+      const more = document.createElement('div');
+      more.className = 'media-strip__more';
+      more.textContent = `+${items.length - 5}`;
+      thumbsWrap.appendChild(more);
+    }
+
+    strip.appendChild(thumbsWrap);
+    card.appendChild(strip);
+  }
   return card;
 };
 
@@ -745,9 +1097,17 @@ const buildDay = (day, idx, isPortfolio) => {
   count.setAttribute('data-items-count', day.items.length);
   count.textContent = `${day.items.length} ${I18N[currentLang].items_label}`;
 
+  const reloadDayBtn = document.createElement('button');
+  reloadDayBtn.type = 'button';
+  reloadDayBtn.className = 'day__reload';
+  reloadDayBtn.setAttribute('aria-label', 'Ricarica contenuti giorno');
+  reloadDayBtn.setAttribute('title', 'Ricarica contenuti');
+  reloadDayBtn.textContent = '↻';
+
   header.appendChild(title);
   header.appendChild(meta);
   header.appendChild(count);
+  header.appendChild(reloadDayBtn);
 
   const notesText = getNote(day);
   const notes = document.createElement('div');
@@ -784,22 +1144,32 @@ const buildDay = (day, idx, isPortfolio) => {
 
   const fillGrid = () => {
     if (grid.childElementCount > 0) return;
-    day.items.forEach((item) => {
-      const card = buildMediaCard(item);
+    (day.uiGroups || []).forEach((group) => {
+      const card = buildMediaCard(group);
       grid.appendChild(card);
     });
   };
+  const refillGrid = () => {
+    grid.innerHTML = '';
+    (day.uiGroups || []).forEach((group) => {
+      const card = buildMediaCard(group);
+      grid.appendChild(card);
+    });
+    recoverVisibleLazyMedia();
+  };
 
   const dayKey = day.date;
+  reloadDayBtn.addEventListener('click', () => {
+    unlockedDayKeys.add(dayKey);
+    refillGrid();
+    if (lockPanel.parentNode) lockPanel.remove();
+  });
   if (unlockedDayKeys.has(dayKey)) {
     fillGrid();
   } else {
     unlockBtn.addEventListener('click', () => {
       unlockedDayKeys.add(dayKey);
       fillGrid();
-      grid.querySelectorAll('img[data-src], video[data-src]').forEach((mediaEl) => {
-        hydrateLazyMedia(mediaEl);
-      });
       lockPanel.remove();
     });
   }
@@ -937,13 +1307,46 @@ const observeSections = () => {
 
   let activeIndex = -1;
   let ticking = false;
+  const unlockQueue = [];
+  const unlockQueuedKeys = new Set();
+  let unlockDrainTimer = null;
+  const enqueueUnlock = (dayKey, sectionEl, highPriority = false) => {
+    if (!dayKey || !sectionEl) return;
+    if (unlockedDayKeys.has(dayKey) || unlockQueuedKeys.has(dayKey)) return;
+    const task = { dayKey, sectionEl };
+    if (highPriority) unlockQueue.unshift(task);
+    else unlockQueue.push(task);
+    unlockQueuedKeys.add(dayKey);
+    if (unlockDrainTimer) return;
+    const drain = () => {
+      const next = unlockQueue.shift();
+      if (!next) {
+        unlockDrainTimer = null;
+        return;
+      }
+      unlockQueuedKeys.delete(next.dayKey);
+      if (!unlockedDayKeys.has(next.dayKey)) {
+        const unlockBtn = next.sectionEl.querySelector('.day-lock__btn');
+        if (unlockBtn) unlockBtn.click();
+      }
+      unlockDrainTimer = window.setTimeout(drain, 140);
+    };
+    unlockDrainTimer = window.setTimeout(drain, 10);
+  };
+  const autoUnlockSection = (sectionEl) => {
+    if (!sectionEl) return;
+    const dayKey = sectionEl.id.replace('day-', '');
+    enqueueUnlock(dayKey, sectionEl);
+  };
 
   const setActiveIndex = (idx) => {
     if (idx < 0 || idx >= sections.length || idx === activeIndex) return;
     activeIndex = idx;
     buttons.forEach((btn, i) => btn.classList.toggle('active', i === idx));
     ensureVisible(buttons[idx]);
-    const dayKey = sections[idx].id.replace('day-', '');
+    const activeSection = sections[idx];
+    const dayKey = activeSection.id.replace('day-', '');
+    enqueueUnlock(dayKey, activeSection, true);
     renderMiniMap(dayKey, idx);
   };
 
@@ -968,23 +1371,62 @@ const observeSections = () => {
       ticking = true;
       window.requestAnimationFrame(syncFromScroll);
     }
+    window.requestAnimationFrame(recoverVisibleLazyMedia);
   };
+
+  let sectionUnlockObserver = null;
+  if (typeof IntersectionObserver !== 'undefined') {
+    sectionUnlockObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          autoUnlockSection(entry.target);
+        });
+      },
+      {
+        root: null,
+        rootMargin: '120px 0px',
+        threshold: 0.01
+      }
+    );
+    sections.forEach((section) => sectionUnlockObserver.observe(section));
+  }
 
   window.addEventListener('scroll', onScroll, { passive: true });
   window.addEventListener('resize', onScroll);
   setActiveIndex(0);
   onScroll();
+  recoverVisibleLazyMedia();
 
   cleanupSectionSync = () => {
     window.removeEventListener('scroll', onScroll);
     window.removeEventListener('resize', onScroll);
+    if (sectionUnlockObserver) {
+      sectionUnlockObserver.disconnect();
+      sectionUnlockObserver = null;
+    }
+    if (unlockDrainTimer) {
+      window.clearTimeout(unlockDrainTimer);
+      unlockDrainTimer = null;
+    }
+    unlockQueue.length = 0;
+    unlockQueuedKeys.clear();
   };
 };
 
 const renderView = () => {
   disconnectLazyMediaObserver();
+  firefoxHydrationQueue.length = 0;
+  if (firefoxHydrationDrainTimer) {
+    window.clearTimeout(firefoxHydrationDrainTimer);
+    firefoxHydrationDrainTimer = null;
+  }
   const data = dataCache;
-  const list = currentView === 'portfolio' ? data.portfolio : data.days;
+  const rawList = currentView === 'portfolio' ? data.portfolio : data.days;
+  const list = rawList.map((day) => ({
+    ...day,
+    uiGroups: groupDayItems(day.items || [])
+  }));
   if (!unlockedDayKeys.size && list.length) {
     unlockedDayKeys.add(list[0].date);
   }
@@ -992,8 +1434,17 @@ const renderView = () => {
   modalItems = list.flatMap((day) => (day.items || []));
   syncSelectedIdsWithCurrentData();
   modalIndexById = new Map();
+  modalGroupByItemId = new Map();
   modalItems.forEach((item, idx) => {
     if (item.id) modalIndexById.set(item.id, idx);
+  });
+  list.forEach((day) => {
+    (day.uiGroups || []).forEach((group) => {
+      if (!group || group.length < 2) return;
+      group.forEach((item) => {
+        if (item && item.id) modalGroupByItemId.set(String(item.id), group);
+      });
+    });
   });
 
   const content = document.getElementById('content');
