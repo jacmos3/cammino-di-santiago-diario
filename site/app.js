@@ -18,7 +18,16 @@ const I18N = {
     empty_note: 'Aggiungi un ricordo personale qui.',
     mini_map: 'Percorso del giorno',
     open_map: 'Apri la mappa',
-    mini_map_empty: 'Nessun GPS per questo giorno.'
+    mini_map_empty: 'Nessun GPS per questo giorno.',
+    select_mode: 'Seleziona',
+    clear_selected: 'Deseleziona tutto',
+    unlock_day: 'Ricarica contenuti',
+    day_locked: 'Contenuti non caricati per alleggerire la pagina.',
+    delete_selected: 'Cancella selezionati',
+    delete_confirm: 'Confermi la cancellazione definitiva di {count} file?',
+    delete_success: '{count} file cancellati.',
+    delete_error: 'Errore durante la cancellazione',
+    deleting: 'Cancellazione...'
   },
   en: {
     eyebrow: 'Travel diary',
@@ -39,7 +48,16 @@ const I18N = {
     empty_note: 'Add a personal memory here.',
     mini_map: 'Daily route',
     open_map: 'Open map',
-    mini_map_empty: 'No GPS for this day.'
+    mini_map_empty: 'No GPS for this day.',
+    select_mode: 'Select',
+    clear_selected: 'Clear selection',
+    unlock_day: 'Load content',
+    day_locked: 'Content not loaded yet to keep the page light.',
+    delete_selected: 'Delete selected',
+    delete_confirm: 'Confirm permanent deletion of {count} files?',
+    delete_success: '{count} files deleted.',
+    delete_error: 'Delete failed',
+    deleting: 'Deleting...'
   }
 };
 
@@ -59,6 +77,7 @@ const setLang = (lang) => {
     btn.classList.toggle('active', btn.dataset.lang === lang);
   });
   renderDates();
+  renderManageTools();
 };
 
 let dataCache = null;
@@ -68,9 +87,15 @@ let miniLayer = null;
 let cleanupSectionSync = null;
 let renderedDayOrder = [];
 let modalZoomCleanup = null;
+let lazyMediaObserver = null;
+let deleteInFlight = false;
+const selectedIds = new Set();
+let unlockedDayKeys = new Set();
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const PHOTO_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp']);
+const IMG_PLACEHOLDER =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
 const isPhotoTrackPoint = (point) => {
   const file = (point && point.file ? String(point.file) : '').trim().toLowerCase();
@@ -120,15 +145,83 @@ const renderDates = () => {
   document.querySelectorAll('[data-i18n="mini_map"]').forEach((el) => {
     el.textContent = I18N[currentLang].mini_map;
   });
+  document.querySelectorAll('[data-day-lock-msg]').forEach((el) => {
+    el.textContent = I18N[currentLang].day_locked;
+  });
+  document.querySelectorAll('[data-day-unlock-btn]').forEach((el) => {
+    el.textContent = I18N[currentLang].unlock_day;
+  });
+};
+
+const disconnectLazyMediaObserver = () => {
+  if (lazyMediaObserver) {
+    lazyMediaObserver.disconnect();
+    lazyMediaObserver = null;
+  }
+};
+
+const hydrateLazyMedia = (el) => {
+  if (!el) return;
+  if (el.tagName === 'IMG') {
+    const src = el.dataset.src;
+    if (src && el.src !== src) el.src = src;
+    el.removeAttribute('data-src');
+    return;
+  }
+  if (el.tagName === 'VIDEO') {
+    const poster = el.dataset.poster;
+    if (poster) {
+      el.poster = poster;
+      el.removeAttribute('data-poster');
+    }
+    const videoSrc = el.dataset.src;
+    if (videoSrc) {
+      const source = el.querySelector('source');
+      if (source && !source.src) {
+        source.src = videoSrc;
+        el.load();
+      }
+      el.removeAttribute('data-src');
+    }
+  }
+};
+
+const ensureLazyMediaObserver = () => {
+  if (lazyMediaObserver || typeof IntersectionObserver === 'undefined') return lazyMediaObserver;
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        hydrateLazyMedia(entry.target);
+        observer.unobserve(entry.target);
+      });
+    },
+    {
+      root: null,
+      rootMargin: '400px 0px',
+      threshold: 0.01
+    }
+  );
+  lazyMediaObserver = observer;
+  return lazyMediaObserver;
+};
+
+const registerLazyMedia = (el) => {
+  const observer = ensureLazyMediaObserver();
+  if (!observer) {
+    hydrateLazyMedia(el);
+    return;
+  }
+  observer.observe(el);
 };
 
 const modal = document.getElementById('live-modal');
 const modalBody = document.getElementById('live-modal-body');
 const modalClose = document.getElementById('live-modal-close');
 const modalBackdrop = document.getElementById('live-modal-backdrop');
-let modalImageItems = [];
-let modalImageIndexById = new Map();
-let modalImageIndex = -1;
+let modalItems = [];
+let modalIndexById = new Map();
+let modalIndex = -1;
 
 const attachImageZoom = (image, controls = null) => {
   let scale = 1;
@@ -275,21 +368,28 @@ const attachImageZoom = (image, controls = null) => {
   };
 };
 
-const openImageModal = (item, imageIndex = null) => {
+const openImageModal = (item, itemIndex = null) => {
   if (!item || !item.src) return;
   if (modalZoomCleanup) {
     modalZoomCleanup();
     modalZoomCleanup = null;
   }
-  const resolvedIndex = Number.isInteger(imageIndex)
-    ? imageIndex
-    : (item.id ? modalImageIndexById.get(item.id) : -1);
-  modalImageIndex = Number.isInteger(resolvedIndex) ? resolvedIndex : -1;
+  const resolvedIndex = Number.isInteger(itemIndex)
+    ? itemIndex
+    : (item.id ? modalIndexById.get(item.id) : -1);
+  modalIndex = Number.isInteger(resolvedIndex) ? resolvedIndex : -1;
   modalBody.innerHTML = '';
   const shell = document.createElement('div');
   shell.className = 'modal__zoom-shell';
   const image = document.createElement('img');
-  image.src = item.src;
+  image.src = item.src || item.thumb || IMG_PLACEHOLDER;
+  image.addEventListener('error', () => {
+    if (item.thumb && image.src !== item.thumb) {
+      image.src = item.thumb;
+      return;
+    }
+    image.src = IMG_PLACEHOLDER;
+  }, { once: true });
   image.alt = item.orig || '';
   image.className = 'modal__image';
   image.draggable = false;
@@ -313,7 +413,7 @@ const openImageModal = (item, imageIndex = null) => {
   modalBody.appendChild(zoomControls);
   const cleanupFns = [];
 
-  if (modalImageItems.length > 1 && modalImageIndex >= 0) {
+  if (modalItems.length > 1 && modalIndex >= 0) {
     const nav = document.createElement('div');
     nav.className = 'modal__nav';
     const prevBtn = document.createElement('button');
@@ -331,10 +431,10 @@ const openImageModal = (item, imageIndex = null) => {
     modalBody.appendChild(nav);
 
     const openByOffset = (offset) => {
-      const len = modalImageItems.length;
-      if (!len || modalImageIndex < 0) return;
-      const nextIndex = (modalImageIndex + offset + len) % len;
-      openImageModal(modalImageItems[nextIndex], nextIndex);
+      const len = modalItems.length;
+      if (!len || modalIndex < 0) return;
+      const nextIndex = (modalIndex + offset + len) % len;
+      openModalItem(modalItems[nextIndex], nextIndex);
     };
     const onPrev = () => openByOffset(-1);
     const onNext = () => openByOffset(1);
@@ -358,13 +458,16 @@ const openImageModal = (item, imageIndex = null) => {
   modal.setAttribute('aria-hidden', 'false');
 };
 
-const openVideoModal = (item) => {
+const openVideoModal = (item, itemIndex = null) => {
   if (!item || !item.src) return;
   if (modalZoomCleanup) {
     modalZoomCleanup();
     modalZoomCleanup = null;
   }
-  modalImageIndex = -1;
+  const resolvedIndex = Number.isInteger(itemIndex)
+    ? itemIndex
+    : (item.id ? modalIndexById.get(item.id) : -1);
+  modalIndex = Number.isInteger(resolvedIndex) ? resolvedIndex : -1;
   modalBody.innerHTML = '';
   const video = document.createElement('video');
   video.controls = true;
@@ -377,8 +480,44 @@ const openVideoModal = (item) => {
   source.type = item.mime || 'video/mp4';
   video.appendChild(source);
   modalBody.appendChild(video);
+
+  if (modalItems.length > 1 && modalIndex >= 0) {
+    const nav = document.createElement('div');
+    nav.className = 'modal__nav';
+    const prevBtn = document.createElement('button');
+    prevBtn.type = 'button';
+    prevBtn.className = 'modal__nav-btn modal__nav-btn--prev';
+    prevBtn.setAttribute('aria-label', 'Elemento precedente');
+    prevBtn.textContent = '‹';
+    const nextBtn = document.createElement('button');
+    nextBtn.type = 'button';
+    nextBtn.className = 'modal__nav-btn modal__nav-btn--next';
+    nextBtn.setAttribute('aria-label', 'Elemento successivo');
+    nextBtn.textContent = '›';
+    nav.appendChild(prevBtn);
+    nav.appendChild(nextBtn);
+    modalBody.appendChild(nav);
+
+    const openByOffset = (offset) => {
+      const len = modalItems.length;
+      if (!len || modalIndex < 0) return;
+      const nextIndex = (modalIndex + offset + len) % len;
+      openModalItem(modalItems[nextIndex], nextIndex);
+    };
+    prevBtn.addEventListener('click', () => openByOffset(-1));
+    nextBtn.addEventListener('click', () => openByOffset(1));
+  }
   modal.classList.add('open');
   modal.setAttribute('aria-hidden', 'false');
+};
+
+const openModalItem = (item, index = null) => {
+  if (!item) return;
+  if (item.type === 'video') {
+    openVideoModal(item, index);
+    return;
+  }
+  openImageModal(item, index);
 };
 
 const closeModal = () => {
@@ -390,7 +529,106 @@ const closeModal = () => {
   modal.classList.remove('open');
   modal.setAttribute('aria-hidden', 'true');
   modalBody.innerHTML = '';
-  modalImageIndex = -1;
+  modalIndex = -1;
+};
+
+const formatI18N = (key, vars = {}) => {
+  let text = I18N[currentLang][key] || '';
+  Object.entries(vars).forEach(([name, value]) => {
+    text = text.replace(`{${name}}`, String(value));
+  });
+  return text;
+};
+
+const renderManageTools = () => {
+  const toggleBtn = document.getElementById('toggle-select');
+  const deleteBtn = document.getElementById('delete-selected');
+  if (!toggleBtn || !deleteBtn) return;
+  toggleBtn.textContent = selectedIds.size > 0 ? I18N[currentLang].clear_selected : I18N[currentLang].select_mode;
+  toggleBtn.classList.remove('active');
+  toggleBtn.disabled = deleteInFlight;
+  const count = selectedIds.size;
+  deleteBtn.textContent = count
+    ? `${I18N[currentLang].delete_selected} (${count})`
+    : I18N[currentLang].delete_selected;
+  deleteBtn.disabled = deleteInFlight || count === 0;
+};
+
+const setCardSelectedState = (card, selectBtn, isSelected) => {
+  card.classList.toggle('is-selected', isSelected);
+  if (!selectBtn) return;
+  selectBtn.setAttribute('aria-checked', isSelected ? 'true' : 'false');
+  selectBtn.textContent = isSelected ? '✓' : '';
+};
+
+const syncSelectedIdsWithCurrentData = () => {
+  const validIds = new Set(modalItems.map((item) => item.id).filter(Boolean));
+  Array.from(selectedIds).forEach((id) => {
+    if (!validIds.has(id)) selectedIds.delete(id);
+  });
+};
+
+const refreshStats = () => {
+  if (!dataCache) return;
+  document.getElementById('stat-days').textContent = dataCache.days.length;
+  document.getElementById('stat-photos').textContent = dataCache.counts.images;
+  document.getElementById('stat-videos').textContent = dataCache.counts.videos;
+  document.getElementById('footer-meta').textContent = `Updated ${dataCache.generated_at}`;
+};
+
+const toggleSelectionById = (itemId, card, selectBtn) => {
+  if (!itemId) return;
+  if (selectedIds.has(itemId)) selectedIds.delete(itemId);
+  else selectedIds.add(itemId);
+  setCardSelectedState(card, selectBtn, selectedIds.has(itemId));
+  renderManageTools();
+};
+
+const toggleSelectionMode = () => {
+  if (!selectedIds.size) return;
+  selectedIds.clear();
+  renderView();
+};
+
+const deleteSelectedItems = async () => {
+  if (deleteInFlight || selectedIds.size === 0) return;
+  const count = selectedIds.size;
+  const accepted = window.confirm(formatI18N('delete_confirm', { count }));
+  if (!accepted) return;
+
+  deleteInFlight = true;
+  renderManageTools();
+  const deleteBtn = document.getElementById('delete-selected');
+  if (deleteBtn) deleteBtn.textContent = I18N[currentLang].deleting;
+
+  try {
+    const response = await fetch('/api/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: Array.from(selectedIds) })
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail || `HTTP ${response.status}`);
+    }
+
+    const payload = await response.json();
+    if (payload && payload.data) {
+      dataCache = payload.data;
+    } else {
+      const reload = await fetch(`data/entries.json?t=${Date.now()}`, { cache: 'no-store' });
+      dataCache = await reload.json();
+    }
+    selectedIds.clear();
+    refreshStats();
+    renderView();
+    window.alert(formatI18N('delete_success', { count: payload.removed || count }));
+  } catch (err) {
+    window.alert(`${I18N[currentLang].delete_error}: ${err.message || err}`);
+  } finally {
+    deleteInFlight = false;
+    renderManageTools();
+  }
 };
 
 modalClose.addEventListener('click', closeModal);
@@ -401,13 +639,13 @@ document.addEventListener('keydown', (e) => {
     closeModal();
     return;
   }
-  if (modalImageIndex >= 0 && modalImageItems.length > 1) {
+  if (modalIndex >= 0 && modalItems.length > 1) {
     if (e.key === 'ArrowLeft') {
-      const nextIndex = (modalImageIndex - 1 + modalImageItems.length) % modalImageItems.length;
-      openImageModal(modalImageItems[nextIndex], nextIndex);
+      const nextIndex = (modalIndex - 1 + modalItems.length) % modalItems.length;
+      openModalItem(modalItems[nextIndex], nextIndex);
     } else if (e.key === 'ArrowRight') {
-      const nextIndex = (modalImageIndex + 1) % modalImageItems.length;
-      openImageModal(modalImageItems[nextIndex], nextIndex);
+      const nextIndex = (modalIndex + 1) % modalItems.length;
+      openModalItem(modalItems[nextIndex], nextIndex);
     }
   }
 });
@@ -415,6 +653,73 @@ document.addEventListener('keydown', (e) => {
 const getNote = (day) => {
   const note = day.notes || {};
   return (currentLang === 'it' ? note.it : note.en) || '';
+};
+
+const buildMediaCard = (item) => {
+  const card = document.createElement('div');
+  card.className = 'media-card';
+  const itemSelected = item.id ? selectedIds.has(item.id) : false;
+  const selectBtn = document.createElement('button');
+  selectBtn.type = 'button';
+  selectBtn.className = 'media-select';
+  selectBtn.setAttribute('aria-checked', 'false');
+  selectBtn.setAttribute('aria-label', 'Seleziona elemento');
+  selectBtn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleSelectionById(item.id, card, selectBtn);
+  });
+
+  if (item.type === 'image') {
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.alt = item.orig;
+    img.src = IMG_PLACEHOLDER;
+    img.dataset.src = item.thumb || item.src;
+    img.decoding = 'async';
+    img.addEventListener('error', () => {
+      if (item.src && img.src !== item.src) {
+        img.src = item.src;
+        return;
+      }
+      img.src = IMG_PLACEHOLDER;
+    });
+    registerLazyMedia(img);
+    card.appendChild(img);
+    const itemIdx = item.id ? modalIndexById.get(item.id) : -1;
+    img.addEventListener('click', () => {
+      openImageModal(item, itemIdx);
+    });
+  } else {
+    const video = document.createElement('video');
+    video.controls = true;
+    video.preload = 'none';
+    video.playsInline = true;
+    if (item.poster) {
+      video.dataset.poster = item.poster;
+    }
+    video.dataset.src = item.src;
+    const source = document.createElement('source');
+    source.type = item.mime || 'video/mp4';
+    video.appendChild(source);
+    registerLazyMedia(video);
+    const itemIdx = item.id ? modalIndexById.get(item.id) : -1;
+    video.addEventListener('click', () => {
+      openVideoModal(item, itemIdx);
+    });
+    card.appendChild(video);
+  }
+
+  card.appendChild(selectBtn);
+  setCardSelectedState(card, selectBtn, itemSelected);
+
+  const tag = document.createElement('div');
+  tag.className = 'media-tag';
+  const tagType = item.type === 'image' ? 'photo' : 'video';
+  tag.setAttribute('data-tag', tagType);
+  tag.textContent = item.type === 'image' ? I18N[currentLang].photo_tag : I18N[currentLang].video_tag;
+  card.appendChild(tag);
+  return card;
 };
 
 const buildDay = (day, idx, isPortfolio) => {
@@ -463,46 +768,48 @@ const buildDay = (day, idx, isPortfolio) => {
 
   const grid = document.createElement('div');
   grid.className = isPortfolio ? 'grid grid--portfolio' : 'grid';
+  const lockPanel = document.createElement('div');
+  lockPanel.className = 'day-lock';
+  const lockMsg = document.createElement('div');
+  lockMsg.className = 'day-lock__msg';
+  lockMsg.setAttribute('data-day-lock-msg', '1');
+  lockMsg.textContent = I18N[currentLang].day_locked;
+  const unlockBtn = document.createElement('button');
+  unlockBtn.type = 'button';
+  unlockBtn.className = 'day-lock__btn';
+  unlockBtn.setAttribute('data-day-unlock-btn', '1');
+  unlockBtn.textContent = I18N[currentLang].unlock_day;
+  lockPanel.appendChild(lockMsg);
+  lockPanel.appendChild(unlockBtn);
 
-  day.items.forEach((item) => {
-    const card = document.createElement('div');
-    card.className = 'media-card';
+  const fillGrid = () => {
+    if (grid.childElementCount > 0) return;
+    day.items.forEach((item) => {
+      const card = buildMediaCard(item);
+      grid.appendChild(card);
+    });
+  };
 
-    if (item.type === 'image') {
-      const img = document.createElement('img');
-      img.loading = 'lazy';
-      img.alt = item.orig;
-      img.src = item.src;
-      card.appendChild(img);
-      const imageIdx = item.id ? modalImageIndexById.get(item.id) : -1;
-      img.addEventListener('click', () => openImageModal(item, imageIdx));
-    } else {
-      const video = document.createElement('video');
-      video.controls = true;
-      video.preload = 'metadata';
-      video.playsInline = true;
-      if (item.poster) video.poster = item.poster;
-      const source = document.createElement('source');
-      source.src = item.src;
-      source.type = item.mime || 'video/mp4';
-      video.appendChild(source);
-      video.addEventListener('click', () => openVideoModal(item));
-      card.appendChild(video);
-    }
-
-    const tag = document.createElement('div');
-    tag.className = 'media-tag';
-    const tagType = item.type === 'image' ? 'photo' : 'video';
-    tag.setAttribute('data-tag', tagType);
-    tag.textContent = item.type === 'image' ? I18N[currentLang].photo_tag : I18N[currentLang].video_tag;
-    card.appendChild(tag);
-
-    grid.appendChild(card);
-  });
+  const dayKey = day.date;
+  if (unlockedDayKeys.has(dayKey)) {
+    fillGrid();
+  } else {
+    unlockBtn.addEventListener('click', () => {
+      unlockedDayKeys.add(dayKey);
+      fillGrid();
+      grid.querySelectorAll('img[data-src], video[data-src]').forEach((mediaEl) => {
+        hydrateLazyMedia(mediaEl);
+      });
+      lockPanel.remove();
+    });
+  }
 
   section.appendChild(header);
   if (!isPortfolio || notesText) {
     section.appendChild(notes);
+  }
+  if (!unlockedDayKeys.has(dayKey)) {
+    section.appendChild(lockPanel);
   }
   section.appendChild(grid);
   return section;
@@ -675,13 +982,18 @@ const observeSections = () => {
 };
 
 const renderView = () => {
+  disconnectLazyMediaObserver();
   const data = dataCache;
   const list = currentView === 'portfolio' ? data.portfolio : data.days;
+  if (!unlockedDayKeys.size && list.length) {
+    unlockedDayKeys.add(list[0].date);
+  }
   renderedDayOrder = list.map((day) => day.date);
-  modalImageItems = list.flatMap((day) => (day.items || []).filter((item) => item.type === 'image'));
-  modalImageIndexById = new Map();
-  modalImageItems.forEach((item, idx) => {
-    if (item.id) modalImageIndexById.set(item.id, idx);
+  modalItems = list.flatMap((day) => (day.items || []));
+  syncSelectedIdsWithCurrentData();
+  modalIndexById = new Map();
+  modalItems.forEach((item, idx) => {
+    if (item.id) modalIndexById.set(item.id, idx);
   });
 
   const content = document.getElementById('content');
@@ -693,6 +1005,7 @@ const renderView = () => {
   buildTimelineNav(list);
   observeSections();
   renderDates();
+  renderManageTools();
 };
 
 const init = async () => {
@@ -709,11 +1022,7 @@ const init = async () => {
       data = await res.json();
     }
     dataCache = data;
-
-    document.getElementById('stat-days').textContent = data.days.length;
-    document.getElementById('stat-photos').textContent = data.counts.images;
-    document.getElementById('stat-videos').textContent = data.counts.videos;
-    document.getElementById('footer-meta').textContent = `Updated ${data.generated_at}`;
+    refreshStats();
 
     renderView();
 
@@ -736,6 +1045,16 @@ const init = async () => {
 
 window.addEventListener('DOMContentLoaded', () => {
   try {
+    const toggleSelectBtn = document.getElementById('toggle-select');
+    const deleteSelectedBtn = document.getElementById('delete-selected');
+    const timelineActions = document.getElementById('timeline-nav-actions');
+    if (timelineActions && deleteSelectedBtn) timelineActions.appendChild(deleteSelectedBtn);
+    if (toggleSelectBtn) toggleSelectBtn.addEventListener('click', toggleSelectionMode);
+    if (deleteSelectedBtn) {
+      deleteSelectedBtn.addEventListener('click', () => {
+        deleteSelectedItems().catch(() => {});
+      });
+    }
     document.querySelectorAll('.lang__btn').forEach((btn) => {
       btn.addEventListener('click', () => setLang(btn.dataset.lang));
     });
@@ -752,6 +1071,7 @@ window.addEventListener('DOMContentLoaded', () => {
       b.classList.toggle('active', b.dataset.view === currentView);
     });
     setLang('it');
+    renderManageTools();
     init();
   } catch (err) {
     const content = document.getElementById('content');

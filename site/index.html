@@ -33,6 +33,12 @@
             <button class="view-btn" data-view="diary" data-i18n="view_diary">Diario</button>
             <button class="view-btn" data-view="portfolio" data-i18n="view_portfolio">Portfolio</button>
           </div>
+          <div class="manage-tools">
+            <button class="manage-btn" id="toggle-select" data-i18n="select_mode">Seleziona</button>
+            <button class="manage-btn manage-btn--danger" id="delete-selected" disabled data-i18n="delete_selected">
+              Cancella selezionati
+            </button>
+          </div>
         </div>
       </div>
       <div class="hero__stats">
@@ -53,7 +59,10 @@
   </header>
 
   <section class="timeline-nav" aria-label="timeline">
-    <div class="timeline-nav__inner" id="timeline-nav"></div>
+    <div class="timeline-nav__wrap">
+      <div class="timeline-nav__inner" id="timeline-nav"></div>
+      <div class="timeline-nav__actions" id="timeline-nav-actions"></div>
+    </div>
   </section>
 
   <main class="content" id="content">
