@@ -560,6 +560,14 @@ const openImageModal = (item, itemIndex = null) => {
     : (item.id ? modalIndexById.get(item.id) : -1);
   modalIndex = Number.isInteger(resolvedIndex) ? resolvedIndex : -1;
   modalBody.innerHTML = '';
+  const whereLabel = buildItemWhereLabel(item);
+  if (whereLabel) {
+    const modalWhere = document.createElement('div');
+    modalWhere.className = 'modal__where';
+    modalWhere.textContent = whereLabel;
+    modalWhere.title = whereLabel;
+    modalBody.appendChild(modalWhere);
+  }
   const shell = document.createElement('div');
   shell.className = 'modal__zoom-shell';
   const image = document.createElement('img');
@@ -684,6 +692,14 @@ const openVideoModal = (item, itemIndex = null) => {
     : (item.id ? modalIndexById.get(item.id) : -1);
   modalIndex = Number.isInteger(resolvedIndex) ? resolvedIndex : -1;
   modalBody.innerHTML = '';
+  const whereLabel = buildItemWhereLabel(item);
+  if (whereLabel) {
+    const modalWhere = document.createElement('div');
+    modalWhere.className = 'modal__where';
+    modalWhere.textContent = whereLabel;
+    modalWhere.title = whereLabel;
+    modalBody.appendChild(modalWhere);
+  }
   const video = document.createElement('video');
   video.controls = true;
   video.autoplay = true;
@@ -877,6 +893,20 @@ const getNote = (day) => {
   return (currentLang === 'it' ? note.it : note.en) || '';
 };
 
+const escapeHtml = (value) => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const renderNoteHtml = (text) => {
+  const safe = escapeHtml(text);
+  return safe
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\r?\n/g, '<br>');
+};
+
 const parseItemTimestamp = (item) => {
   const date = String(item && item.date ? item.date : '').trim();
   const time = String(item && item.time ? item.time : '').trim();
@@ -948,6 +978,64 @@ const getGroupThumbSrc = (item) => {
   return item.thumb || item.src || '';
 };
 
+const formatItemTimeLabel = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const match = raw.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return raw;
+  const hh = String(Number(match[1])).padStart(2, '0');
+  const mm = match[2];
+  return `${hh}:${mm}`;
+};
+
+const buildGroupTimeRangeLabel = (items) => {
+  const times = (items || [])
+    .map((it) => formatItemTimeLabel(it && it.time))
+    .filter(Boolean);
+  if (!times.length) return '';
+  if (times.length === 1) return times[0];
+  const start = times[0];
+  const end = times[times.length - 1];
+  return start === end ? start : `${start}-${end}`;
+};
+
+const buildGroupPlaceLabel = (items) => {
+  const places = (items || [])
+    .map((it) => String(it && it.place ? it.place : '').trim())
+    .filter(Boolean);
+  if (!places.length) return '';
+  const unique = [...new Set(places)];
+  if (unique.length === 1) return unique[0];
+  return `${unique[0]}...`;
+};
+
+const buildWhereLabel = (timeLabel, placeLabel) => {
+  const time = String(timeLabel || '').trim();
+  const place = String(placeLabel || '').trim();
+  if (time && place) return `h${time} a ${place}`;
+  if (time) return `h${time}`;
+  return place;
+};
+
+const getGroupContextItems = (item) => {
+  if (!item || !item.id) return [item];
+  const group = modalGroupByItemId.get(String(item.id));
+  if (Array.isArray(group) && group.length) return group;
+  return [item];
+};
+
+const buildItemWhereLabel = (item) => {
+  if (!item) return '';
+  const contextItems = getGroupContextItems(item);
+  const time = contextItems.length > 1
+    ? buildGroupTimeRangeLabel(contextItems)
+    : formatItemTimeLabel(item.time);
+  const place = contextItems.length > 1
+    ? buildGroupPlaceLabel(contextItems)
+    : String(item.place || '').trim();
+  return buildWhereLabel(time, place);
+};
+
 const buildMediaCard = (groupItems) => {
   const items = Array.isArray(groupItems) && groupItems.length ? groupItems : [];
   const item = items[0];
@@ -1005,7 +1093,7 @@ const buildMediaCard = (groupItems) => {
     const itemIdx = item.id ? modalIndexById.get(item.id) : -1;
     const durationBadge = document.createElement('div');
     durationBadge.className = 'media-duration';
-    durationBadge.textContent = '--:--';
+    durationBadge.textContent = 'video --:--';
     card.appendChild(durationBadge);
     const posterImg = document.createElement('img');
     posterImg.loading = 'lazy';
@@ -1026,13 +1114,13 @@ const buildMediaCard = (groupItems) => {
     probe.preload = 'metadata';
     probe.src = item.src;
     probe.addEventListener('loadedmetadata', () => {
-      durationBadge.textContent = formatDuration(probe.duration);
+      durationBadge.textContent = `video ${formatDuration(probe.duration)}`;
     }, { once: true });
     probe.addEventListener('error', () => {
-      durationBadge.textContent = '--:--';
+      durationBadge.textContent = 'video --:--';
     }, { once: true });
     if (!item.src) {
-      durationBadge.textContent = '--:--';
+      durationBadge.textContent = 'video --:--';
     }
   }
 
@@ -1044,18 +1132,24 @@ const buildMediaCard = (groupItems) => {
     card.appendChild(playIndicator);
   }
 
+  const whereLabel = buildWhereLabel(
+    items.length > 1 ? buildGroupTimeRangeLabel(items) : formatItemTimeLabel(item.time),
+    items.length > 1 ? buildGroupPlaceLabel(items) : String(item.place || '').trim()
+  );
+  if (whereLabel) {
+    const whereBadge = document.createElement('div');
+    whereBadge.className = 'media-where';
+    whereBadge.textContent = whereLabel;
+    whereBadge.title = whereLabel;
+    card.appendChild(whereBadge);
+  }
+
   card.appendChild(selectBtn);
   setCardSelectedState(card, selectBtn, itemSelected);
   if (selectedCount > 0 && selectedCount < itemIds.length) {
     selectBtn.textContent = String(selectedCount);
   }
 
-  const tag = document.createElement('div');
-  tag.className = 'media-tag';
-  const tagType = item.type === 'image' ? 'photo' : 'video';
-  tag.setAttribute('data-tag', tagType);
-  tag.textContent = item.type === 'image' ? I18N[currentLang].photo_tag : I18N[currentLang].video_tag;
-  card.appendChild(tag);
   if (items.length > 1) {
     card.classList.add('media-card--group');
     const burst = document.createElement('div');
@@ -1146,7 +1240,7 @@ const buildDay = (day, idx, isPortfolio) => {
   notesLabel.textContent = I18N[currentLang].notes_label;
   const notesBody = document.createElement('div');
   if (notesText) {
-    notesBody.textContent = notesText;
+    notesBody.innerHTML = renderNoteHtml(notesText);
   } else {
     notesBody.setAttribute('data-empty-note', '1');
     notesBody.textContent = I18N[currentLang].empty_note;

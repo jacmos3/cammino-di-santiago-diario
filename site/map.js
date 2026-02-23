@@ -15,34 +15,47 @@ const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', 
 
 tiles.addTo(map);
 
-fetch('data/track.geojson')
-  .then((res) => res.json())
-  .then((geojson) => {
-    const pointFeatures = (geojson.features || [])
-      .filter((feature) => feature && feature.geometry && feature.geometry.type === 'Point')
-      .filter((feature) => isPhotoFile(feature.properties && feature.properties.file))
+Promise.all([
+  fetch('data/track.geojson').then((res) => res.json()).catch(() => null),
+  fetch('data/track_points.json').then((res) => res.json()).catch(() => [])
+])
+  .then(([geojson, trackPoints]) => {
+    const lineFeature = (geojson && geojson.features || [])
+      .find((feature) => feature && feature.geometry && feature.geometry.type === 'LineString');
+
+    let lineLayer = null;
+    if (lineFeature) {
+      lineLayer = L.geoJSON(lineFeature, {
+        style: {
+          color: '#b06c36',
+          weight: 4,
+          opacity: 0.9
+        }
+      }).addTo(map);
+    }
+
+    const pointFeatures = (Array.isArray(trackPoints) ? trackPoints : [])
+      .filter((p) => Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)))
+      .filter((p) => isPhotoFile(p.file))
       .sort((a, b) => {
-        const ta = Date.parse((a.properties && a.properties.time) || '');
-        const tb = Date.parse((b.properties && b.properties.time) || '');
+        const ta = Date.parse(String(a.time || ''));
+        const tb = Date.parse(String(b.time || ''));
         if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
         if (Number.isNaN(ta)) return 1;
         if (Number.isNaN(tb)) return -1;
         return ta - tb;
-      });
-
-    const latlngs = pointFeatures.map((feature) => {
-      const [lon, lat] = feature.geometry.coordinates || [];
-      return [lat, lon];
-    });
-
-    let lineLayer = null;
-    if (latlngs.length >= 2) {
-      lineLayer = L.polyline(latlngs, {
-        color: '#b06c36',
-        weight: 4,
-        opacity: 0.9
-      }).addTo(map);
-    }
+      })
+      .map((p) => ({
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: [Number(p.lon), Number(p.lat)]
+        },
+        properties: {
+          time: p.time || '',
+          file: p.file || ''
+        }
+      }));
 
     const pointsLayer = L.geoJSON({ type: 'FeatureCollection', features: pointFeatures }, {
       pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
@@ -50,17 +63,21 @@ fetch('data/track.geojson')
         color: '#1f5f5b',
         weight: 1,
         fillColor: '#1f5f5b',
-        fillOpacity: 0.7
+        fillOpacity: 0.72
       }),
       onEachFeature: (feature, layer) => {
-        if (feature.properties && feature.properties.time) {
-          layer.bindPopup(`${feature.properties.time}<br>${feature.properties.file}`);
-        }
+        const time = feature.properties && feature.properties.time ? feature.properties.time : '';
+        const file = feature.properties && feature.properties.file ? feature.properties.file : '';
+        if (time || file) layer.bindPopup(`${time}${time && file ? '<br>' : ''}${file}`);
       }
     }).addTo(map);
 
-    const bounds = lineLayer ? lineLayer.getBounds() : pointsLayer.getBounds();
-    if (bounds.isValid()) {
+    const boundsCandidates = [];
+    if (lineLayer && lineLayer.getBounds().isValid()) boundsCandidates.push(lineLayer.getBounds());
+    if (pointsLayer && pointsLayer.getBounds().isValid()) boundsCandidates.push(pointsLayer.getBounds());
+    if (boundsCandidates.length) {
+      const bounds = boundsCandidates[0];
+      for (let i = 1; i < boundsCandidates.length; i += 1) bounds.extend(boundsCandidates[i]);
       map.fitBounds(bounds, { padding: [20, 20] });
     } else {
       map.setView([0, 0], 2);
