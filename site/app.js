@@ -133,6 +133,41 @@ const withCacheBust = (url, token) => {
   return `${url}${sep}v=${encodeURIComponent(String(token))}`;
 };
 
+const API_BASE_CANDIDATES = [
+  'http://127.0.0.1:4173',
+  'http://localhost:4173',
+  ''
+];
+
+const postJsonWithApiFallback = async (path, payload) => {
+  let lastError = null;
+  for (const base of API_BASE_CANDIDATES) {
+    const url = `${base}${path}`;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (response.ok) {
+        const json = await response.json();
+        return { response, payload: json };
+      }
+      const detail = await response.text();
+      const err = new Error(detail || `HTTP ${response.status}`);
+      err.status = response.status;
+      lastError = err;
+      if (response.status === 405 || response.status === 501 || response.status === 404) {
+        continue;
+      }
+      throw err;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('API unavailable');
+};
+
 const isPhotoTrackPoint = (point) => {
   const file = (point && point.file ? String(point.file) : '').trim().toLowerCase();
   if (!file.includes('.')) return true;
@@ -611,16 +646,7 @@ const openImageModal = (item, itemIndex = null) => {
     if (!item.id || rotateBtn.disabled) return;
     rotateBtn.disabled = true;
     try {
-      const res = await fetch('/api/rotate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: String(item.id), degrees: 90 })
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `HTTP ${res.status}`);
-      }
-      const payload = await res.json();
+      const { payload } = await postJsonWithApiFallback('/api/rotate', { id: String(item.id), degrees: 90 });
       const cacheBust = payload && payload.cache_bust ? payload.cache_bust : Date.now();
       const modalBase = item.src || item.thumb || '';
       if (modalBase) image.src = withCacheBust(modalBase, cacheBust);
@@ -793,17 +819,7 @@ const deleteItemsByIds = async (ids, options = {}) => {
   if (deleteBtn) deleteBtn.textContent = I18N[currentLang].deleting;
 
   try {
-    const response = await fetch('/api/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: uniqueIds })
-    });
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(detail || `HTTP ${response.status}`);
-    }
-
-    const payload = await response.json();
+    const { payload } = await postJsonWithApiFallback('/api/delete', { ids: uniqueIds });
     if (payload && payload.data) {
       dataCache = payload.data;
     } else {
@@ -839,6 +855,8 @@ modalClose.addEventListener('click', closeModal);
 modalBackdrop.addEventListener('click', closeModal);
 document.addEventListener('keydown', (e) => {
   if (!modal.classList.contains('open')) return;
+  const target = e.target;
+  if (target && (target.tagName === 'VIDEO' || target.closest?.('video'))) return;
   if (e.key === 'Escape') {
     closeModal();
     return;
@@ -873,6 +891,18 @@ const parseOrigSequence = (orig) => {
   const name = String(orig || '').toUpperCase();
   const match = name.match(/IMG_(\d+)/);
   return match ? Number(match[1]) : Number.NaN;
+};
+
+const formatDuration = (seconds) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return '--:--';
+  const total = Math.round(seconds);
+  const hh = Math.floor(total / 3600);
+  const mm = Math.floor((total % 3600) / 60);
+  const ss = total % 60;
+  if (hh > 0) {
+    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  }
+  return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
 };
 
 const shouldGroupAsBurst = (prev, curr) => {
@@ -973,38 +1003,36 @@ const buildMediaCard = (groupItems) => {
   } else {
     card.classList.add('media-card--video');
     const itemIdx = item.id ? modalIndexById.get(item.id) : -1;
-    if (IS_FIREFOX) {
-      const posterImg = document.createElement('img');
-      posterImg.loading = 'lazy';
-      posterImg.alt = item.orig || 'Video';
+    const durationBadge = document.createElement('div');
+    durationBadge.className = 'media-duration';
+    durationBadge.textContent = '--:--';
+    card.appendChild(durationBadge);
+    const posterImg = document.createElement('img');
+    posterImg.loading = 'lazy';
+    posterImg.alt = item.orig || 'Video';
+    posterImg.src = IMG_PLACEHOLDER;
+    posterImg.dataset.src = item.poster || item.thumb || item.src;
+    posterImg.decoding = 'async';
+    posterImg.addEventListener('error', () => {
       posterImg.src = IMG_PLACEHOLDER;
-      posterImg.dataset.src = item.poster || item.thumb || item.src;
-      posterImg.decoding = 'async';
-      posterImg.addEventListener('error', () => {
-        posterImg.src = IMG_PLACEHOLDER;
-      });
-      registerLazyMedia(posterImg);
-      posterImg.addEventListener('click', () => {
-        openVideoModal(item, itemIdx);
-      });
-      card.appendChild(posterImg);
-    } else {
-      const video = document.createElement('video');
-      video.controls = true;
-      video.preload = 'none';
-      video.playsInline = true;
-      if (item.poster) {
-        video.dataset.poster = item.poster;
-      }
-      video.dataset.src = item.src;
-      const source = document.createElement('source');
-      source.type = item.mime || 'video/mp4';
-      video.appendChild(source);
-      registerLazyMedia(video);
-      video.addEventListener('click', () => {
-        openVideoModal(item, itemIdx);
-      });
-      card.appendChild(video);
+    });
+    registerLazyMedia(posterImg);
+    posterImg.addEventListener('click', () => {
+      openVideoModal(item, itemIdx);
+    });
+    card.appendChild(posterImg);
+
+    const probe = document.createElement('video');
+    probe.preload = 'metadata';
+    probe.src = item.src;
+    probe.addEventListener('loadedmetadata', () => {
+      durationBadge.textContent = formatDuration(probe.duration);
+    }, { once: true });
+    probe.addEventListener('error', () => {
+      durationBadge.textContent = '--:--';
+    }, { once: true });
+    if (!item.src) {
+      durationBadge.textContent = '--:--';
     }
   }
 
