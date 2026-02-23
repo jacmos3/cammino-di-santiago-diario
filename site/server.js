@@ -2,6 +2,8 @@ const http = require('http');
 const fs = require('fs/promises');
 const path = require('path');
 const { createReadStream } = require('fs');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 
 const ROOT = path.resolve(__dirname);
 const PORT = Number(process.env.PORT || 4173);
@@ -25,6 +27,8 @@ const MIME = {
 };
 
 let deleteInFlight = false;
+let rotateInFlight = false;
+const execFileAsync = promisify(execFile);
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -67,6 +71,40 @@ async function safeUnlink(filePath) {
     if (err && err.code === 'ENOENT') return false;
     throw err;
   }
+}
+
+async function parseJsonBody(req, maxBytes = 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let rawBody = '';
+    req.on('data', (chunk) => {
+      rawBody += chunk;
+      if (rawBody.length > maxBytes) {
+        reject(new Error('Payload too large'));
+      }
+    });
+    req.on('error', reject);
+    req.on('end', () => {
+      try {
+        resolve(rawBody ? JSON.parse(rawBody) : {});
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
+function isInsideRoot(filePath) {
+  return filePath.startsWith(ROOT + path.sep) || filePath === ROOT;
+}
+
+async function safeRotateFile(filePath, degrees) {
+  try {
+    await fs.access(filePath);
+  } catch {
+    return false;
+  }
+  await execFileAsync('sips', ['-r', String(degrees), filePath]);
+  return true;
 }
 
 function normalizeDays(days) {
@@ -136,22 +174,9 @@ async function handleDelete(req, res) {
     return;
   }
 
-  let rawBody = '';
-  req.on('data', (chunk) => {
-    rawBody += chunk;
-    if (rawBody.length > 1024 * 1024) {
-      req.destroy(new Error('Payload too large'));
-    }
-  });
-
-  req.on('error', (err) => {
-    sendJson(res, 400, { error: err.message || String(err) });
-  });
-
-  req.on('end', async () => {
-    try {
-      deleteInFlight = true;
-      const payload = rawBody ? JSON.parse(rawBody) : {};
+  try {
+    deleteInFlight = true;
+    const payload = await parseJsonBody(req);
       const ids = Array.isArray(payload.ids) ? payload.ids.map((v) => String(v)) : [];
       if (!ids.length) {
         sendJson(res, 400, { error: 'No ids provided' });
@@ -235,17 +260,90 @@ async function handleDelete(req, res) {
       await writeJson(trackByDayPath, rebuiltTrackByDay);
       await writeJson(trackGeoJsonPath, rebuiltTrackGeo);
 
-      sendJson(res, 200, {
-        removed: removedItems.length,
-        files_deleted: filesDeleted,
-        data: updatedEntries
-      });
-    } catch (err) {
-      sendJson(res, 500, { error: err.message || String(err) });
-    } finally {
-      deleteInFlight = false;
+    sendJson(res, 200, {
+      removed: removedItems.length,
+      files_deleted: filesDeleted,
+      data: updatedEntries
+    });
+  } catch (err) {
+    sendJson(res, 500, { error: err.message || String(err) });
+  } finally {
+    deleteInFlight = false;
+  }
+}
+
+async function handleRotate(req, res) {
+  if (rotateInFlight) {
+    sendJson(res, 409, { error: 'Rotate already in progress' });
+    return;
+  }
+  try {
+    rotateInFlight = true;
+    const payload = await parseJsonBody(req);
+    const id = payload && payload.id ? String(payload.id) : '';
+    const degreesRaw = Number(payload && payload.degrees ? payload.degrees : 90);
+    const degrees = degreesRaw % 360;
+    if (!id) {
+      sendJson(res, 400, { error: 'Missing id' });
+      return;
     }
-  });
+    if (!degrees || !Number.isFinite(degrees)) {
+      sendJson(res, 400, { error: 'Invalid degrees' });
+      return;
+    }
+
+    const entriesPath = path.join(ROOT, 'data', 'entries.json');
+    const entries = await readJson(entriesPath);
+    const allItems = (entries.days || []).flatMap((day) => day.items || []);
+    const item = allItems.find((x) => String(x.id || '') === id);
+    if (!item) {
+      sendJson(res, 404, { error: 'Item not found' });
+      return;
+    }
+    if (String(item.type) !== 'image') {
+      sendJson(res, 400, { error: 'Only image items can be rotated' });
+      return;
+    }
+
+    const targets = new Set();
+    for (const key of ['src', 'thumb']) {
+      const val = item[key];
+      if (typeof val === 'string' && val.trim()) {
+        targets.add(path.resolve(ROOT, val));
+      }
+    }
+    const orig = String(item.orig || '').trim();
+    if (orig) {
+      targets.add(path.join(ROOT, 'new', orig));
+    }
+
+    let rotatedFiles = 0;
+    for (const filePath of targets) {
+      if (!isInsideRoot(filePath)) continue;
+      const rotated = await safeRotateFile(filePath, degrees);
+      if (rotated) rotatedFiles += 1;
+    }
+    if (!rotatedFiles) {
+      sendJson(res, 404, { error: 'No files rotated' });
+      return;
+    }
+
+    const updatedEntries = {
+      ...entries,
+      generated_at: new Date().toISOString()
+    };
+    await writeJson(entriesPath, updatedEntries);
+    await rewriteEntriesJs(updatedEntries);
+    sendJson(res, 200, {
+      ok: true,
+      rotated_files: rotatedFiles,
+      cache_bust: Date.now()
+    });
+  } catch (err) {
+    sendJson(res, 500, { error: err.message || String(err) });
+  } finally {
+    rotateInFlight = false;
+  }
 }
 
 async function serveStatic(req, res) {
@@ -285,6 +383,10 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && req.url.split('?')[0] === '/api/delete') {
     await handleDelete(req, res);
+    return;
+  }
+  if (req.method === 'POST' && req.url.split('?')[0] === '/api/rotate') {
+    await handleRotate(req, res);
     return;
   }
 
