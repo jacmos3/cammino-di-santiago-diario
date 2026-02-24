@@ -175,6 +175,53 @@ const isPhotoTrackPoint = (point) => {
   return PHOTO_EXTENSIONS.has(ext);
 };
 
+const toFiniteCoord = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+const getGoogleMapsUrl = (lat, lon) => {
+  const a = toFiniteCoord(lat);
+  const b = toFiniteCoord(lon);
+  if (a === null || b === null) return '';
+  return `https://www.google.com/maps?q=${a},${b}`;
+};
+
+const hasMapsCoordinates = (item) => !!getGoogleMapsUrl(item && item.lat, item && item.lon);
+
+const buildTrackPointIndex = (points) => {
+  const index = new Map();
+  (points || []).forEach((point) => {
+    const file = point && point.file ? String(point.file).trim() : '';
+    const lat = toFiniteCoord(point && point.lat);
+    const lon = toFiniteCoord(point && point.lon);
+    if (!file || lat === null || lon === null) return;
+    const key = file.toUpperCase();
+    if (!index.has(key)) index.set(key, { lat, lon });
+  });
+  return index;
+};
+
+const enrichDataWithTrackPoints = (data, points) => {
+  if (!data) return;
+  const index = buildTrackPointIndex(points);
+  if (!index.size) return;
+  const applyToDays = (days) => {
+    (days || []).forEach((day) => {
+      (day.items || []).forEach((item) => {
+        const orig = item && item.orig ? String(item.orig).trim() : '';
+        if (!orig) return;
+        const match = index.get(orig.toUpperCase());
+        if (!match) return;
+        item.lat = match.lat;
+        item.lon = match.lon;
+      });
+    });
+  };
+  applyToDays(data.days);
+  applyToDays(data.portfolio);
+};
+
 const formatDate = (dateStr) => {
   const [y, m, d] = dateStr.split('-').map(Number);
   const date = new Date(y, m - 1, d);
@@ -560,13 +607,11 @@ const openImageModal = (item, itemIndex = null) => {
     : (item.id ? modalIndexById.get(item.id) : -1);
   modalIndex = Number.isInteger(resolvedIndex) ? resolvedIndex : -1;
   modalBody.innerHTML = '';
+  const whereRef = getGroupContextItems(item).find(hasMapsCoordinates) || item;
   const whereLabel = buildItemWhereLabel(item);
   if (whereLabel) {
-    const modalWhere = document.createElement('div');
-    modalWhere.className = 'modal__where';
-    modalWhere.textContent = whereLabel;
-    modalWhere.title = whereLabel;
-    modalBody.appendChild(modalWhere);
+    const modalWhere = buildModalWhereBadge(whereLabel, whereRef);
+    if (modalWhere) modalBody.appendChild(modalWhere);
   }
   const shell = document.createElement('div');
   shell.className = 'modal__zoom-shell';
@@ -692,13 +737,11 @@ const openVideoModal = (item, itemIndex = null) => {
     : (item.id ? modalIndexById.get(item.id) : -1);
   modalIndex = Number.isInteger(resolvedIndex) ? resolvedIndex : -1;
   modalBody.innerHTML = '';
+  const whereRef = getGroupContextItems(item).find(hasMapsCoordinates) || item;
   const whereLabel = buildItemWhereLabel(item);
   if (whereLabel) {
-    const modalWhere = document.createElement('div');
-    modalWhere.className = 'modal__where';
-    modalWhere.textContent = whereLabel;
-    modalWhere.title = whereLabel;
-    modalBody.appendChild(modalWhere);
+    const modalWhere = buildModalWhereBadge(whereLabel, whereRef);
+    if (modalWhere) modalBody.appendChild(modalWhere);
   }
   const video = document.createElement('video');
   video.controls = true;
@@ -1017,6 +1060,50 @@ const buildWhereLabel = (timeLabel, placeLabel) => {
   return place;
 };
 
+const buildWhereBadge = (whereLabel, item, className) => {
+  const label = String(whereLabel || '').trim();
+  if (!label) return null;
+  const mapsUrl = getGoogleMapsUrl(item && item.lat, item && item.lon);
+  const displayLabel = label;
+  if (mapsUrl) {
+    const link = document.createElement('a');
+    link.className = `${className} ${className}--link`;
+    link.href = mapsUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = displayLabel;
+    link.title = `${displayLabel}`;
+    return link;
+  }
+  const badge = document.createElement('div');
+  badge.className = className;
+  badge.textContent = displayLabel;
+  badge.title = displayLabel;
+  return badge;
+};
+
+const buildModalWhereBadge = (whereLabel, item) => {
+  const label = String(whereLabel || '').trim();
+  if (!label) return null;
+  const mapsUrl = getGoogleMapsUrl(item && item.lat, item && item.lon);
+  if (!mapsUrl) return buildWhereBadge(label, item, 'modal__where');
+  const link = document.createElement('a');
+  link.className = 'modal__where modal__where--link';
+  link.href = mapsUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.title = `${label} · Google Maps`;
+  const main = document.createElement('span');
+  main.className = 'modal__where-main';
+  main.textContent = label;
+  const cta = document.createElement('span');
+  cta.className = 'modal__where-cta';
+  cta.textContent = 'Google Maps ↗';
+  link.appendChild(main);
+  link.appendChild(cta);
+  return link;
+};
+
 const getGroupContextItems = (item) => {
   if (!item || !item.id) return [item];
   const group = modalGroupByItemId.get(String(item.id));
@@ -1137,11 +1224,9 @@ const buildMediaCard = (groupItems) => {
     items.length > 1 ? buildGroupPlaceLabel(items) : String(item.place || '').trim()
   );
   if (whereLabel) {
-    const whereBadge = document.createElement('div');
-    whereBadge.className = 'media-where';
-    whereBadge.textContent = whereLabel;
-    whereBadge.title = whereLabel;
-    card.appendChild(whereBadge);
+    const whereRef = items.find(hasMapsCoordinates) || item;
+    const whereBadge = buildWhereBadge(whereLabel, whereRef, 'media-where');
+    if (whereBadge) card.appendChild(whereBadge);
   }
 
   card.appendChild(selectBtn);
@@ -1429,13 +1514,38 @@ const observeSections = () => {
 
   let activeIndex = -1;
   let ticking = false;
+  const AUTO_UNLOCK_DELAY_MS = 1000;
   const unlockQueue = [];
   const unlockQueuedKeys = new Set();
+  const sectionIndexByDayKey = new Map(
+    sections.map((sectionEl, idx) => [sectionEl.id.replace('day-', ''), idx])
+  );
   let unlockDrainTimer = null;
+  const clickUnlockIfNeeded = (sectionEl) => {
+    if (!sectionEl) return false;
+    const dayKey = sectionEl.id.replace('day-', '');
+    if (unlockedDayKeys.has(dayKey)) return false;
+    const unlockBtn = sectionEl.querySelector('.day-lock__btn');
+    if (!unlockBtn) return false;
+    unlockBtn.click();
+    return true;
+  };
+  const unlockNeighbors = (dayKey) => {
+    const idx = sectionIndexByDayKey.get(dayKey);
+    if (!Number.isInteger(idx)) return;
+    const prev = sections[idx - 1] || null;
+    const next = sections[idx + 1] || null;
+    clickUnlockIfNeeded(prev);
+    clickUnlockIfNeeded(next);
+  };
   const enqueueUnlock = (dayKey, sectionEl, highPriority = false) => {
     if (!dayKey || !sectionEl) return;
     if (unlockedDayKeys.has(dayKey) || unlockQueuedKeys.has(dayKey)) return;
-    const task = { dayKey, sectionEl };
+    const task = {
+      dayKey,
+      sectionEl,
+      notBeforeTs: Date.now() + AUTO_UNLOCK_DELAY_MS
+    };
     if (highPriority) unlockQueue.unshift(task);
     else unlockQueue.push(task);
     unlockQueuedKeys.add(dayKey);
@@ -1446,10 +1556,20 @@ const observeSections = () => {
         unlockDrainTimer = null;
         return;
       }
+      const waitMs = next.notBeforeTs - Date.now();
+      if (waitMs > 0) {
+        unlockQueue.unshift(next);
+        unlockDrainTimer = window.setTimeout(drain, waitMs);
+        return;
+      }
       unlockQueuedKeys.delete(next.dayKey);
-      if (!unlockedDayKeys.has(next.dayKey)) {
-        const unlockBtn = next.sectionEl.querySelector('.day-lock__btn');
-        if (unlockBtn) unlockBtn.click();
+      // Skip auto-unlock if user has already scrolled far away.
+      if (!unlockedDayKeys.has(next.dayKey) && isNearViewport(next.sectionEl, 260)) {
+        const unlocked = clickUnlockIfNeeded(next.sectionEl);
+        if (unlocked) {
+          // When a day gets unlocked, preload adjacent days as requested.
+          unlockNeighbors(next.dayKey);
+        }
       }
       unlockDrainTimer = window.setTimeout(drain, 140);
     };
@@ -1593,6 +1713,15 @@ const init = async () => {
     if (!data) {
       const res = await fetch('data/entries.json');
       data = await res.json();
+    }
+    try {
+      const resTrackPoints = await fetch('data/track_points.json');
+      if (resTrackPoints.ok) {
+        const trackPoints = await resTrackPoints.json();
+        enrichDataWithTrackPoints(data, trackPoints);
+      }
+    } catch {
+      // Optional enrichment: keep rendering even if GPS file is unavailable.
     }
     dataCache = data;
     refreshStats();

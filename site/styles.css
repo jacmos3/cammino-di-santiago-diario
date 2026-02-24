@@ -439,6 +439,11 @@ h1, h2, h3 {
   z-index: 4;
 }
 
+.media-card--group.media-card--video .media-burst {
+  left: auto;
+  right: 38px;
+}
+
 .media-card--group .media-where {
   bottom: 48px;
 }
@@ -517,6 +522,15 @@ h1, h2, h3 {
   align-items: center;
   justify-content: center;
   cursor: pointer;
+}
+
+.media-where--link {
+  color: #fffaf2;
+  text-decoration: none;
+}
+
+.media-where--link:hover {
+  filter: brightness(1.08);
 }
 
 .media-select[aria-checked="true"] {
@@ -638,6 +652,20 @@ h1, h2, h3 {
 
 .mini-map__open:hover {
   filter: brightness(1.05);
+}
+
+.map-flight-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: rgba(95, 127, 167, 0.92);
+  color: #fffaf2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 250, 242, 0.85);
 }
 
 .mini-map__date {
@@ -768,6 +796,45 @@ h1, h2, h3 {
   padding: 6px 10px;
   font-size: 0.78rem;
   line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modal__where--link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  color: #fffaf2;
+  text-decoration: none;
+}
+
+.modal__where--link:hover {
+  filter: brightness(1.08);
+}
+
+.modal__where-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal__where-cta {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  line-height: 1.1;
+  opacity: 0.95;
+  white-space: nowrap;
+}
+
+.modal__where-cta::before {
+  content: "· ";
+}
+
+.modal__where {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
