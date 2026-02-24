@@ -86,6 +86,7 @@ let dataCache = null;
 let trackByDay = null;
 let miniMap = null;
 let miniLayer = null;
+let dayMapRegistry = new Map();
 let cleanupSectionSync = null;
 let renderedDayOrder = [];
 let modalZoomCleanup = null;
@@ -101,6 +102,7 @@ const IMG_PLACEHOLDER =
 const IS_FIREFOX =
   typeof navigator !== 'undefined' &&
   /firefox/i.test(String(navigator.userAgent || ''));
+const SHOW_DAY_MEDIA_PINS = true;
 const firefoxHydrationQueue = [];
 let firefoxHydrationDrainTimer = null;
 
@@ -202,19 +204,73 @@ const buildTrackPointIndex = (points) => {
   return index;
 };
 
+const buildTrackPointsByDay = (points) => {
+  const byDay = new Map();
+  (points || []).forEach((point) => {
+    const date = String(point && point.date ? point.date : '').slice(0, 10);
+    const lat = toFiniteCoord(point && point.lat);
+    const lon = toFiniteCoord(point && point.lon);
+    const time = String(point && point.time ? point.time : '');
+    if (!date || lat === null || lon === null || !time) return;
+    const ts = Date.parse(time);
+    if (Number.isNaN(ts)) return;
+    if (!byDay.has(date)) byDay.set(date, []);
+    byDay.get(date).push({ lat, lon, ts });
+  });
+  byDay.forEach((arr) => arr.sort((a, b) => a.ts - b.ts));
+  return byDay;
+};
+
+const parseItemLocalTimestamp = (date, time) => {
+  const d = String(date || '').slice(0, 10);
+  const t = String(time || '').trim();
+  if (!d || !t) return null;
+  const normalized = t.length === 5 ? `${t}:00` : t;
+  const ts = Date.parse(`${d}T${normalized}`);
+  return Number.isNaN(ts) ? null : ts;
+};
+
+const findNearestTrackPoint = (dayPoints, ts, maxDeltaMs) => {
+  if (!Array.isArray(dayPoints) || !dayPoints.length || !Number.isFinite(ts)) return null;
+  let best = null;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  for (const p of dayPoints) {
+    const delta = Math.abs(p.ts - ts);
+    if (delta < bestDelta) {
+      best = p;
+      bestDelta = delta;
+    }
+  }
+  if (!best || bestDelta > maxDeltaMs) return null;
+  return best;
+};
+
 const enrichDataWithTrackPoints = (data, points) => {
   if (!data) return;
   const index = buildTrackPointIndex(points);
-  if (!index.size) return;
+  const pointsByDay = buildTrackPointsByDay(points);
+  if (!index.size && !pointsByDay.size) return;
+  const MAX_NEAREST_DELTA_MS = 2 * 60 * 60 * 1000; // 2h
   const applyToDays = (days) => {
     (days || []).forEach((day) => {
       (day.items || []).forEach((item) => {
         const orig = item && item.orig ? String(item.orig).trim() : '';
-        if (!orig) return;
-        const match = index.get(orig.toUpperCase());
-        if (!match) return;
-        item.lat = match.lat;
-        item.lon = match.lon;
+        const exactMatch = orig ? index.get(orig.toUpperCase()) : null;
+        if (exactMatch) {
+          item.lat = exactMatch.lat;
+          item.lon = exactMatch.lon;
+          return;
+        }
+        // Fallback for imported tracks (e.g. Runtastic): nearest point by time in same day.
+        if (toFiniteCoord(item && item.lat) !== null && toFiniteCoord(item && item.lon) !== null) return;
+        const dayKey = String(day && day.date ? day.date : '').slice(0, 10);
+        if (!dayKey) return;
+        const ts = parseItemLocalTimestamp(dayKey, item && item.time);
+        if (ts === null) return;
+        const nearest = findNearestTrackPoint(pointsByDay.get(dayKey), ts, MAX_NEAREST_DELTA_MS);
+        if (!nearest) return;
+        item.lat = nearest.lat;
+        item.lon = nearest.lon;
       });
     });
   };
@@ -262,6 +318,12 @@ const renderDates = () => {
   });
   document.querySelectorAll('[data-i18n="mini_map"]').forEach((el) => {
     el.textContent = I18N[currentLang].mini_map;
+  });
+  document.querySelectorAll('.day-track__open').forEach((el) => {
+    el.textContent = I18N[currentLang].open_map;
+  });
+  document.querySelectorAll('[data-day-track-empty]').forEach((el) => {
+    el.textContent = I18N[currentLang].mini_map_empty;
   });
   document.querySelectorAll('[data-day-lock-msg]').forEach((el) => {
     el.textContent = I18N[currentLang].day_locked;
@@ -1315,6 +1377,8 @@ const buildDay = (day, idx, isPortfolio) => {
   header.appendChild(meta);
   header.appendChild(count);
   header.appendChild(reloadDayBtn);
+  
+  const dayTrackCard = buildDayTrackCard(day.date);
 
   const notesText = getNote(day);
   const notes = document.createElement('div');
@@ -1382,6 +1446,7 @@ const buildDay = (day, idx, isPortfolio) => {
   }
 
   section.appendChild(header);
+  section.appendChild(dayTrackCard);
   if (!isPortfolio || notesText) {
     section.appendChild(notes);
   }
@@ -1390,6 +1455,265 @@ const buildDay = (day, idx, isPortfolio) => {
   }
   section.appendChild(grid);
   return section;
+};
+
+const toRad = (deg) => (Number(deg) * Math.PI) / 180;
+const distanceMeters = (a, b) => {
+  if (!a || !b) return Number.POSITIVE_INFINITY;
+  const lat1 = Number(a.lat);
+  const lon1 = Number(a.lon);
+  const lat2 = Number(b.lat);
+  const lon2 = Number(b.lon);
+  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return Number.POSITIVE_INFINITY;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const rLat1 = toRad(lat1);
+  const rLat2 = toRad(lat2);
+  const h = Math.sin(dLat / 2) ** 2
+    + Math.cos(rLat1) * Math.cos(rLat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+};
+
+const simplifyTrackPoints = (points, minDistM = 10) => {
+  if (!Array.isArray(points) || points.length <= 2) return points || [];
+  const out = [points[0]];
+  let last = points[0];
+  for (let i = 1; i < points.length - 1; i += 1) {
+    const p = points[i];
+    if (distanceMeters(last, p) >= minDistM) {
+      out.push(p);
+      last = p;
+    }
+  }
+  out.push(points[points.length - 1]);
+  return out;
+};
+
+const getDayTrackSegments = (dayKey) => {
+  const raw = ((trackByDay && trackByDay[dayKey]) || [])
+    .filter(isPhotoTrackPoint)
+    .map((p) => ({
+      lat: Number(p.lat),
+      lon: Number(p.lon),
+      file: String(p.file || ''),
+      ts: Date.parse(String(p.time || ''))
+    }))
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon) && Number.isFinite(p.ts));
+
+  if (!raw.length) return [];
+
+  // If Runtastic track exists for the day, use it as authoritative path.
+  const hasRuntastic = raw.some((p) => p.file.startsWith('RUNTASTIC_'));
+  const source = hasRuntastic ? raw.filter((p) => p.file.startsWith('RUNTASTIC_')) : raw;
+  source.sort((a, b) => a.ts - b.ts);
+
+  const groups = new Map();
+  source.forEach((p) => {
+    const key = p.file || '__single__';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ lat: p.lat, lon: p.lon, ts: p.ts });
+  });
+
+  const segments = [];
+  groups.forEach((pts) => {
+    const simplified = simplifyTrackPoints(pts, 10);
+    if (simplified.length >= 2) segments.push(simplified);
+  });
+  return segments;
+};
+
+const getDayMediaPinGroups = (dayKey) => {
+  if (!dataCache || !Array.isArray(dataCache.days)) return [];
+  const day = dataCache.days.find((d) => String(d && d.date) === String(dayKey));
+  if (!day || !Array.isArray(day.items)) return [];
+
+  const groups = new Map();
+  day.items.forEach((item) => {
+    // Requested pins for photos of the day.
+    if (!item || item.type !== 'image') return;
+    const lat = toFiniteCoord(item.lat);
+    const lon = toFiniteCoord(item.lon);
+    if (lat === null || lon === null) return;
+    const key = `${lat.toFixed(5)}|${lon.toFixed(5)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  });
+
+  const out = [];
+  groups.forEach((items, key) => {
+    const [latStr, lonStr] = key.split('|');
+    out.push({
+      lat: Number(latStr),
+      lon: Number(lonStr),
+      items: items.sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')))
+    });
+  });
+  return out;
+};
+
+const clearDayMapRegistry = () => {
+  dayMapRegistry.forEach((entry) => {
+    if (!entry || !entry.map) return;
+    try {
+      entry.map.remove();
+    } catch {
+      // no-op
+    }
+  });
+  dayMapRegistry = new Map();
+};
+
+const buildDayTrackCard = (dayKey) => {
+  const wrap = document.createElement('div');
+  wrap.className = 'day-track';
+  wrap.setAttribute('data-day-track', dayKey);
+
+  const head = document.createElement('div');
+  head.className = 'day-track__head';
+  const label = document.createElement('span');
+  label.setAttribute('data-i18n', 'mini_map');
+  label.textContent = I18N[currentLang].mini_map;
+  const open = document.createElement('a');
+  open.className = 'day-track__open';
+  open.href = 'map.html';
+  open.textContent = I18N[currentLang].open_map;
+  head.appendChild(label);
+  head.appendChild(open);
+
+  const body = document.createElement('div');
+  body.className = 'day-track__body';
+
+  const segments = getDayTrackSegments(dayKey);
+  const totalPoints = segments.reduce((acc, s) => acc + s.length, 0);
+  if (!segments.length || totalPoints < 2) {
+    body.classList.add('is-empty');
+    body.setAttribute('data-day-track-empty', '1');
+    body.textContent = I18N[currentLang].mini_map_empty;
+    wrap.appendChild(head);
+    wrap.appendChild(body);
+    return wrap;
+  }
+
+  const mapEl = document.createElement('div');
+  mapEl.className = 'day-track__map';
+  mapEl.setAttribute('data-day-track-map', dayKey);
+  body.appendChild(mapEl);
+
+  const meta = document.createElement('div');
+  meta.className = 'day-track__meta';
+  meta.textContent = `${totalPoints} pts`;
+  body.appendChild(meta);
+
+  wrap.appendChild(head);
+  wrap.appendChild(body);
+  return wrap;
+};
+
+const initDayTrackMap = (mapEl) => {
+  if (!mapEl || typeof L === 'undefined') return;
+  const dayKey = mapEl.getAttribute('data-day-track-map');
+  if (!dayKey || dayMapRegistry.has(dayKey)) return;
+  const segments = getDayTrackSegments(dayKey);
+  if (!segments.length) return;
+
+  const map = L.map(mapEl, {
+    zoomControl: true,
+    attributionControl: false,
+    dragging: true,
+    scrollWheelZoom: false,
+    doubleClickZoom: true,
+    boxZoom: false,
+    keyboard: false,
+    touchZoom: true,
+  });
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+  }).addTo(map);
+
+  let bounds = null;
+  segments.forEach((segment) => {
+    const latlngs = segment.map((p) => [p.lat, p.lon]);
+    const line = L.polyline(latlngs, {
+      color: '#b06c36',
+      weight: 4,
+      opacity: 0.9
+    }).addTo(map);
+    bounds = bounds ? bounds.extend(line.getBounds()) : line.getBounds();
+  });
+
+  const first = segments[0][0];
+  const lastSeg = segments[segments.length - 1];
+  const last = lastSeg[lastSeg.length - 1];
+  if (!first || !last) return;
+  L.circleMarker([first.lat, first.lon], {
+    radius: 5,
+    color: '#1f5f5b',
+    weight: 2,
+    fillColor: '#1f5f5b',
+    fillOpacity: 0.95
+  }).addTo(map);
+
+  L.circleMarker([last.lat, last.lon], {
+    radius: 5,
+    color: '#d08643',
+    weight: 2,
+    fillColor: '#d08643',
+    fillOpacity: 0.95
+  }).addTo(map);
+
+  if (bounds && bounds.isValid()) {
+    map.fitBounds(bounds, { padding: [18, 18], animate: false });
+  }
+
+  if (SHOW_DAY_MEDIA_PINS) {
+    const pinGroups = getDayMediaPinGroups(dayKey);
+    pinGroups.forEach((group) => {
+      const count = group.items.length;
+      const pin = L.circleMarker([group.lat, group.lon], {
+        radius: count > 1 ? 6 : 4.5,
+        color: '#153d70',
+        weight: 2,
+        fillColor: '#4b83c7',
+        fillOpacity: 0.95
+      }).addTo(map);
+      const first = group.items[0] || {};
+      const place = first.place ? `<br>${first.place}` : '';
+      const title = count > 1
+        ? `${count} foto${place}`
+        : `${first.time || ''}${place}`;
+      pin.bindPopup(title);
+      pin.on('click', () => {
+        const target = group.items[0];
+        if (!target) return;
+        const idx = target.id ? modalIndexById.get(target.id) : -1;
+        openModalItem(target, idx);
+      });
+    });
+  }
+
+  dayMapRegistry.set(dayKey, { map, el: mapEl });
+  window.setTimeout(() => map.invalidateSize(), 0);
+};
+
+const ensureVisibleDayTrackMaps = () => {
+  document.querySelectorAll('.day-track__map').forEach((el) => {
+    if (!isNearViewport(el, 300)) return;
+    initDayTrackMap(el);
+  });
+};
+
+const refreshDayTrackCards = () => {
+  clearDayMapRegistry();
+  document.querySelectorAll('.day').forEach((section) => {
+    const dayKey = String(section.id || '').replace('day-', '');
+    if (!dayKey) return;
+    const oldCard = section.querySelector('.day-track');
+    if (!oldCard) return;
+    const nextCard = buildDayTrackCard(dayKey);
+    oldCard.replaceWith(nextCard);
+  });
+  ensureVisibleDayTrackMaps();
 };
 
 const buildTimelineNav = (days) => {
@@ -1614,6 +1938,7 @@ const observeSections = () => {
       window.requestAnimationFrame(syncFromScroll);
     }
     window.requestAnimationFrame(recoverVisibleLazyMedia);
+    window.requestAnimationFrame(ensureVisibleDayTrackMaps);
   };
 
   let sectionUnlockObserver = null;
@@ -1639,6 +1964,7 @@ const observeSections = () => {
   setActiveIndex(0);
   onScroll();
   recoverVisibleLazyMedia();
+  ensureVisibleDayTrackMaps();
 
   cleanupSectionSync = () => {
     window.removeEventListener('scroll', onScroll);
@@ -1657,6 +1983,7 @@ const observeSections = () => {
 };
 
 const renderView = () => {
+  clearDayMapRegistry();
   disconnectLazyMediaObserver();
   firefoxHydrationQueue.length = 0;
   if (firefoxHydrationDrainTimer) {
@@ -1733,6 +2060,7 @@ const init = async () => {
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         trackByDay = json || null;
+        refreshDayTrackCards();
         if (data.days.length) {
           renderMiniMap(data.days[0].date, 0);
         }
