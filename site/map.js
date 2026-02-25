@@ -1,6 +1,8 @@
 const map = L.map('map', { scrollWheelZoom: true });
 const PHOTO_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp']);
 const MAX_LINK_KM = 100;
+const selectedDay = new URLSearchParams(window.location.search).get('day') || '';
+const selectedUptoDay = new URLSearchParams(window.location.search).get('upto') || '';
 
 const isPhotoFile = (name) => {
   const file = (name ? String(name) : '').trim().toLowerCase();
@@ -70,6 +72,36 @@ const buildFlightCurve = (from, to, segments = 24) => {
   return points;
 };
 
+const buildSegmentsFromFeatures = (features) => {
+  const lineSegments = [];
+  const flightSegments = [];
+  let currentSegment = [];
+  (features || []).forEach((feature, idx) => {
+    const [lon, lat] = feature.geometry.coordinates || [];
+    const curr = [lat, lon];
+    if (!currentSegment.length) {
+      currentSegment.push(curr);
+      return;
+    }
+    const prevFeature = features[idx - 1];
+    const [prevLon, prevLat] = prevFeature.geometry.coordinates || [];
+    const prev = [prevLat, prevLon];
+    const jumpKm = distanceKm(prev, curr);
+    const split = jumpKm > MAX_LINK_KM;
+    if (split) {
+      if (Number.isFinite(jumpKm)) {
+        flightSegments.push({ from: prev, to: curr, km: jumpKm });
+      }
+      if (currentSegment.length >= 2) lineSegments.push(currentSegment);
+      currentSegment = [curr];
+    } else {
+      currentSegment.push(curr);
+    }
+  });
+  if (currentSegment.length >= 2) lineSegments.push(currentSegment);
+  return { lineSegments, flightSegments };
+};
+
 Promise.all([
   fetch('data/track_points.json').then((res) => res.json()).catch(() => [])
 ])
@@ -97,33 +129,15 @@ Promise.all([
           date: p.date || ''
         }
       }));
-
-    const lineSegments = [];
-    const flightSegments = [];
-    let currentSegment = [];
-    pointFeatures.forEach((feature, idx) => {
-      const [lon, lat] = feature.geometry.coordinates || [];
-      const curr = [lat, lon];
-      if (!currentSegment.length) {
-        currentSegment.push(curr);
-        return;
-      }
-      const prevFeature = pointFeatures[idx - 1];
-      const [prevLon, prevLat] = prevFeature.geometry.coordinates || [];
-      const prev = [prevLat, prevLon];
-      const jumpKm = distanceKm(prev, curr);
-      const split = jumpKm > MAX_LINK_KM;
-      if (split) {
-        if (Number.isFinite(jumpKm)) {
-          flightSegments.push({ from: prev, to: curr, km: jumpKm });
-        }
-        if (currentSegment.length >= 2) lineSegments.push(currentSegment);
-        currentSegment = [curr];
-      } else {
-        currentSegment.push(curr);
-      }
-    });
-    if (currentSegment.length >= 2) lineSegments.push(currentSegment);
+    const { lineSegments, flightSegments } = buildSegmentsFromFeatures(pointFeatures);
+    const selectedFeatures = selectedDay
+      ? pointFeatures.filter((f) => String(f.properties && f.properties.date ? f.properties.date : '') === selectedDay)
+      : [];
+    const selectedUptoFeatures = selectedUptoDay
+      ? pointFeatures.filter((f) => String(f.properties && f.properties.date ? f.properties.date : '') <= selectedUptoDay)
+      : [];
+    const selectedSplit = buildSegmentsFromFeatures(selectedFeatures);
+    const selectedUptoSplit = buildSegmentsFromFeatures(selectedUptoFeatures);
 
     let lineLayer = null;
     lineSegments.forEach((segment) => {
@@ -148,12 +162,68 @@ Promise.all([
       const plane = L.marker(mid, {
         icon: L.divIcon({
           className: 'map-flight-icon',
-          html: '✈',
+          html: '<span class="map-flight-glyph">✈</span>',
           iconSize: [30, 30],
           iconAnchor: [15, 15]
         })
       }).addTo(map);
       plane.bindPopup(`Tratto aereo ~${Math.round(segment.km)} km`);
+    });
+
+    let selectedLineLayer = null;
+    selectedSplit.lineSegments.forEach((segment) => {
+      const poly = L.polyline(segment, {
+        color: '#da6c2c',
+        weight: 6,
+        opacity: 0.95
+      }).addTo(map);
+      if (!selectedLineLayer) selectedLineLayer = poly;
+    });
+    selectedSplit.flightSegments.forEach((segment) => {
+      const curved = buildFlightCurve(segment.from, segment.to);
+      L.polyline(curved, {
+        color: '#da6c2c',
+        weight: 4,
+        opacity: 0.95,
+        dashArray: '10 8'
+      }).addTo(map);
+      const mid = curved[Math.floor(curved.length / 2)] || midpoint(segment.from, segment.to);
+      L.marker(mid, {
+        icon: L.divIcon({
+          className: 'map-flight-icon map-flight-icon--day',
+          html: '<span class="map-flight-glyph">✈</span>',
+          iconSize: [34, 34],
+          iconAnchor: [17, 17]
+        })
+      }).addTo(map);
+    });
+
+    let selectedUptoLineLayer = null;
+    selectedUptoSplit.lineSegments.forEach((segment) => {
+      const poly = L.polyline(segment, {
+        color: '#2b6cb0',
+        weight: 5,
+        opacity: 0.9
+      }).addTo(map);
+      if (!selectedUptoLineLayer) selectedUptoLineLayer = poly;
+    });
+    selectedUptoSplit.flightSegments.forEach((segment) => {
+      const curved = buildFlightCurve(segment.from, segment.to);
+      L.polyline(curved, {
+        color: '#2b6cb0',
+        weight: 3.5,
+        opacity: 0.9,
+        dashArray: '8 7'
+      }).addTo(map);
+      const mid = curved[Math.floor(curved.length / 2)] || midpoint(segment.from, segment.to);
+      L.marker(mid, {
+        icon: L.divIcon({
+          className: 'map-flight-icon map-flight-icon--upto',
+          html: '<span class="map-flight-glyph">✈</span>',
+          iconSize: [32, 32],
+          iconAnchor: [16, 16]
+        })
+      }).addTo(map);
     });
 
     const pointsLayer = L.geoJSON({ type: 'FeatureCollection', features: pointFeatures }, {
@@ -171,9 +241,33 @@ Promise.all([
       }
     }).addTo(map);
 
+    const selectedPointsLayer = L.geoJSON({ type: 'FeatureCollection', features: selectedFeatures }, {
+      pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+        radius: 6,
+        color: '#8d3f15',
+        weight: 2,
+        fillColor: '#f0a56f',
+        fillOpacity: 0.95
+      })
+    }).addTo(map);
+
+    const selectedUptoPointsLayer = L.geoJSON({ type: 'FeatureCollection', features: selectedUptoFeatures }, {
+      pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+        radius: 5,
+        color: '#1d4f86',
+        weight: 2,
+        fillColor: '#78aee6',
+        fillOpacity: 0.9
+      })
+    }).addTo(map);
+
     const boundsCandidates = [];
     if (lineLayer && lineLayer.getBounds().isValid()) boundsCandidates.push(lineLayer.getBounds());
     if (pointsLayer && pointsLayer.getBounds().isValid()) boundsCandidates.push(pointsLayer.getBounds());
+    if (selectedUptoLineLayer && selectedUptoLineLayer.getBounds().isValid()) boundsCandidates.unshift(selectedUptoLineLayer.getBounds());
+    if (selectedUptoPointsLayer && selectedUptoPointsLayer.getBounds().isValid()) boundsCandidates.unshift(selectedUptoPointsLayer.getBounds());
+    if (selectedLineLayer && selectedLineLayer.getBounds().isValid()) boundsCandidates.unshift(selectedLineLayer.getBounds());
+    if (selectedPointsLayer && selectedPointsLayer.getBounds().isValid()) boundsCandidates.unshift(selectedPointsLayer.getBounds());
     if (boundsCandidates.length) {
       const bounds = boundsCandidates[0];
       for (let i = 1; i < boundsCandidates.length; i += 1) bounds.extend(boundsCandidates[i]);

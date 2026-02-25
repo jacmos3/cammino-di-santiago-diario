@@ -474,6 +474,23 @@ h1, h2, h3 {
   font-variant-numeric: tabular-nums;
 }
 
+.media-source {
+  position: absolute;
+  left: 8px;
+  top: 36px;
+  z-index: 4;
+  max-width: calc(100% - 48px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: rgba(31, 26, 22, 0.7);
+  color: #fffaf2;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  line-height: 1.1;
+}
+
 .media-where {
   position: absolute;
   left: 8px;
@@ -507,7 +524,7 @@ h1, h2, h3 {
 
 .media-card--group.media-card--video .media-burst {
   left: auto;
-  right: 38px;
+  right: 72px;
 }
 
 .media-card--group .media-where {
@@ -590,6 +607,26 @@ h1, h2, h3 {
   cursor: pointer;
 }
 
+.media-share {
+  position: absolute;
+  top: 8px;
+  right: 38px;
+  z-index: 4;
+  border: 1px solid rgba(255, 250, 242, 0.85);
+  border-radius: 999px;
+  background: rgba(31, 26, 22, 0.68);
+  color: #fffaf2;
+  font-size: 0.9rem;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
 .media-where--link {
   color: #fffaf2;
   text-decoration: none;
@@ -597,6 +634,10 @@ h1, h2, h3 {
 
 .media-where--link:hover {
   filter: brightness(1.08);
+}
+
+.media-where--estimated {
+  border: 1px dashed rgba(255, 250, 242, 0.72);
 }
 
 .media-select[aria-checked="true"] {
@@ -628,12 +669,43 @@ h1, h2, h3 {
   line-height: 1.5;
 }
 
+.notes__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
 .notes__label {
   font-size: 0.85rem;
   text-transform: uppercase;
   letter-spacing: 1px;
   color: var(--accent-2);
-  margin-bottom: 6px;
+  margin-bottom: 0;
+}
+
+.notes__share {
+  border: 1px solid rgba(31, 26, 22, 0.18);
+  background: #fffaf2;
+  color: var(--ink);
+  border-radius: 999px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  line-height: 1;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.is-linked-target {
+  outline: 4px solid rgba(255, 209, 64, 0.98);
+  outline-offset: -4px;
+  box-shadow: 0 0 0 3px rgba(255, 247, 204, 0.8) inset, 0 0 18px rgba(255, 209, 64, 0.75);
 }
 
 .day-lock {
@@ -732,6 +804,31 @@ h1, h2, h3 {
   font-size: 16px;
   box-shadow: 0 2px 7px rgba(0, 0, 0, 0.32);
   border: 1px solid rgba(255, 250, 242, 0.85);
+}
+
+.map-flight-icon--mini {
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.map-flight-icon--day {
+  background: rgba(218, 108, 44, 0.94);
+  border-color: rgba(255, 250, 242, 0.95);
+}
+
+.map-flight-icon--upto {
+  background: rgba(43, 108, 176, 0.94);
+  border-color: rgba(255, 250, 242, 0.95);
+}
+
+.map-flight-glyph {
+  display: inline-block;
+  transform: scaleX(-1);
 }
 
 .mini-map__date {
@@ -880,6 +977,10 @@ h1, h2, h3 {
   filter: brightness(1.08);
 }
 
+.modal__where--estimated {
+  border: 1px dashed rgba(255, 250, 242, 0.72);
+}
+
 .modal__where-main {
   min-width: 0;
   flex: 1 1 auto;
@@ -901,6 +1002,24 @@ h1, h2, h3 {
 }
 
 .modal__where {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modal__source {
+  position: absolute;
+  top: 82px;
+  left: 12px;
+  right: 12px;
+  z-index: 3;
+  margin-right: 100px;
+  background: rgba(31, 26, 22, 0.62);
+  color: #fffaf2;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.72rem;
+  line-height: 1.1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

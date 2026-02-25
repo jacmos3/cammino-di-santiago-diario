@@ -17,8 +17,13 @@ const I18N = {
     notes_label: 'Note del giorno',
     empty_note: 'Aggiungi un ricordo personale qui.',
     mini_map: 'Percorso del giorno',
+    mini_map_cumulative: 'Percorso cumulativo',
     open_map: 'Apri la mappa',
     mini_map_empty: 'Nessun GPS per questo giorno.',
+    gps_estimated: 'stimata',
+    whatsapp_badge: 'Inoltrata su WhatsApp · orario non affidabile',
+    share: 'Condividi',
+    share_copied: 'Copiato',
     select_mode: 'Seleziona',
     clear_selected: 'Deseleziona tutto',
     unlock_day: 'Ricarica contenuti',
@@ -48,8 +53,13 @@ const I18N = {
     notes_label: 'Day notes',
     empty_note: 'Add a personal memory here.',
     mini_map: 'Daily route',
+    mini_map_cumulative: 'Cumulative route',
     open_map: 'Open map',
     mini_map_empty: 'No GPS for this day.',
+    gps_estimated: 'estimated',
+    whatsapp_badge: 'Forwarded on WhatsApp · unreliable time',
+    share: 'Share',
+    share_copied: 'Copied',
     select_mode: 'Select',
     clear_selected: 'Clear selection',
     unlock_day: 'Load content',
@@ -78,6 +88,12 @@ const setLang = (lang) => {
   document.querySelectorAll('.lang__btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.lang === lang);
   });
+  document.querySelectorAll('[data-share-btn]').forEach((btn) => {
+    if (btn.dataset.copied === '1') btn.textContent = '✓';
+    else btn.textContent = '↗';
+    btn.setAttribute('aria-label', I18N[lang].share);
+    btn.setAttribute('title', I18N[lang].share);
+  });
   renderDates();
   renderManageTools();
 };
@@ -103,6 +119,7 @@ const IS_FIREFOX =
   typeof navigator !== 'undefined' &&
   /firefox/i.test(String(navigator.userAgent || ''));
 const SHOW_DAY_MEDIA_PINS = true;
+const GPS_INFERENCE_EXCLUDED_ORIG = new Set(['PHOTO-2019-06-12-21-03-29.JPG']);
 const firefoxHydrationQueue = [];
 let firefoxHydrationDrainTimer = null;
 
@@ -204,9 +221,11 @@ const buildTrackPointIndex = (points) => {
   return index;
 };
 
-const buildTrackPointsByDay = (points) => {
+const buildRuntasticPointsByDay = (points) => {
   const byDay = new Map();
   (points || []).forEach((point) => {
+    const file = String(point && point.file ? point.file : '');
+    if (!file.startsWith('RUNTASTIC_')) return;
     const date = String(point && point.date ? point.date : '').slice(0, 10);
     const lat = toFiniteCoord(point && point.lat);
     const lon = toFiniteCoord(point && point.lon);
@@ -248,9 +267,9 @@ const findNearestTrackPoint = (dayPoints, ts, maxDeltaMs) => {
 const enrichDataWithTrackPoints = (data, points) => {
   if (!data) return;
   const index = buildTrackPointIndex(points);
-  const pointsByDay = buildTrackPointsByDay(points);
-  if (!index.size && !pointsByDay.size) return;
-  const MAX_NEAREST_DELTA_MS = 2 * 60 * 60 * 1000; // 2h
+  const runtasticByDay = buildRuntasticPointsByDay(points);
+  if (!index.size && !runtasticByDay.size) return;
+  const MAX_NEAREST_DELTA_MS = 2 * 60 * 60 * 1000;
   const applyToDays = (days) => {
     (days || []).forEach((day) => {
       (day.items || []).forEach((item) => {
@@ -259,18 +278,26 @@ const enrichDataWithTrackPoints = (data, points) => {
         if (exactMatch) {
           item.lat = exactMatch.lat;
           item.lon = exactMatch.lon;
+          item.gpsInferred = false;
           return;
         }
-        // Fallback for imported tracks (e.g. Runtastic): nearest point by time in same day.
-        if (toFiniteCoord(item && item.lat) !== null && toFiniteCoord(item && item.lon) !== null) return;
+        const existingLat = toFiniteCoord(item && item.lat);
+        const existingLon = toFiniteCoord(item && item.lon);
+        if (existingLat !== null && existingLon !== null) {
+          item.gpsInferred = false;
+          return;
+        }
+        const upperOrig = String(orig || '').toUpperCase();
+        if (GPS_INFERENCE_EXCLUDED_ORIG.has(upperOrig)) return;
         const dayKey = String(day && day.date ? day.date : '').slice(0, 10);
         if (!dayKey) return;
         const ts = parseItemLocalTimestamp(dayKey, item && item.time);
         if (ts === null) return;
-        const nearest = findNearestTrackPoint(pointsByDay.get(dayKey), ts, MAX_NEAREST_DELTA_MS);
+        const nearest = findNearestTrackPoint(runtasticByDay.get(dayKey), ts, MAX_NEAREST_DELTA_MS);
         if (!nearest) return;
         item.lat = nearest.lat;
         item.lon = nearest.lon;
+        item.gpsInferred = true;
       });
     });
   };
@@ -669,12 +696,14 @@ const openImageModal = (item, itemIndex = null) => {
     : (item.id ? modalIndexById.get(item.id) : -1);
   modalIndex = Number.isInteger(resolvedIndex) ? resolvedIndex : -1;
   modalBody.innerHTML = '';
-  const whereRef = getGroupContextItems(item).find(hasMapsCoordinates) || item;
+  const whereRef = pickGroupWhereRef(getGroupContextItems(item), item);
   const whereLabel = buildItemWhereLabel(item);
   if (whereLabel) {
     const modalWhere = buildModalWhereBadge(whereLabel, whereRef);
     if (modalWhere) modalBody.appendChild(modalWhere);
   }
+  const modalSource = buildSourceBadge(getGroupContextItems(item), 'modal__source');
+  if (modalSource) modalBody.appendChild(modalSource);
   const shell = document.createElement('div');
   shell.className = 'modal__zoom-shell';
   const image = document.createElement('img');
@@ -799,12 +828,14 @@ const openVideoModal = (item, itemIndex = null) => {
     : (item.id ? modalIndexById.get(item.id) : -1);
   modalIndex = Number.isInteger(resolvedIndex) ? resolvedIndex : -1;
   modalBody.innerHTML = '';
-  const whereRef = getGroupContextItems(item).find(hasMapsCoordinates) || item;
+  const whereRef = pickGroupWhereRef(getGroupContextItems(item), item);
   const whereLabel = buildItemWhereLabel(item);
   if (whereLabel) {
     const modalWhere = buildModalWhereBadge(whereLabel, whereRef);
     if (modalWhere) modalBody.appendChild(modalWhere);
   }
+  const modalSource = buildSourceBadge(getGroupContextItems(item), 'modal__source');
+  if (modalSource) modalBody.appendChild(modalSource);
   const video = document.createElement('video');
   video.controls = true;
   video.autoplay = true;
@@ -875,6 +906,123 @@ const formatI18N = (key, vars = {}) => {
     text = text.replace(`{${name}}`, String(value));
   });
   return text;
+};
+
+const buildShareUrl = (anchorId) => {
+  const url = new URL(window.location.href);
+  url.hash = String(anchorId || '').trim();
+  return url.toString();
+};
+
+const copyTextToClipboard = async (text) => {
+  const value = String(text || '');
+  if (!value) return false;
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    await navigator.clipboard.writeText(value);
+    return true;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = value;
+  ta.setAttribute('readonly', 'readonly');
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch {
+    document.body.removeChild(ta);
+    return false;
+  }
+};
+
+const setShareButtonCopied = (btn) => {
+  if (!btn) return;
+  btn.dataset.copied = '1';
+  btn.textContent = '✓';
+  if (btn._shareCopiedTimer) window.clearTimeout(btn._shareCopiedTimer);
+  btn._shareCopiedTimer = window.setTimeout(() => {
+    btn.dataset.copied = '0';
+    btn.textContent = '↗';
+  }, 1300);
+};
+
+const createShareButton = (anchorId, className) => {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = className;
+  btn.setAttribute('data-share-btn', '1');
+  btn.dataset.copied = '0';
+  btn.textContent = '↗';
+  btn.setAttribute('aria-label', I18N[currentLang].share);
+  btn.setAttribute('title', I18N[currentLang].share);
+  btn.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const url = buildShareUrl(anchorId);
+    const copied = await copyTextToClipboard(url);
+    if (copied) {
+      setShareButtonCopied(btn);
+      if (history && typeof history.replaceState === 'function') {
+        history.replaceState(null, '', `#${anchorId}`);
+      }
+      return;
+    }
+    window.prompt('Copia questo link:', url);
+  });
+  return btn;
+};
+
+const highlightLinkedTarget = (el) => {
+  if (!el) return;
+  el.classList.add('is-linked-target');
+  window.setTimeout(() => el.classList.remove('is-linked-target'), 6000);
+};
+
+const findDayKeyByItemId = (id) => {
+  const key = String(id || '').trim();
+  if (!key || !dataCache || !Array.isArray(dataCache.days)) return '';
+  for (const day of dataCache.days) {
+    const found = (day.items || []).some((it) => String(it && it.id) === key);
+    if (found) return String(day.date || '');
+  }
+  return '';
+};
+
+const updateDaySectionHydration = (dayKey) => {
+  const key = String(dayKey || '').trim();
+  if (!key) return;
+  const section = document.getElementById(`day-${key}`);
+  if (!section) return;
+  const unlockBtn = section.querySelector('.day-lock__btn');
+  if (unlockBtn) unlockBtn.click();
+};
+
+const focusHashAnchor = (hashValue, attempts = 6) => {
+  const raw = String(hashValue || window.location.hash || '').replace(/^#/, '');
+  if (!raw) return;
+  const anchor = decodeURIComponent(raw);
+
+  if (anchor.startsWith('media-')) {
+    const itemId = anchor.slice('media-'.length);
+    const dayKey = findDayKeyByItemId(itemId);
+    if (dayKey && !unlockedDayKeys.has(dayKey)) {
+      unlockedDayKeys.add(dayKey);
+      updateDaySectionHydration(dayKey);
+    }
+  }
+
+  const target = document.getElementById(anchor);
+  if (!target) {
+    if (attempts > 0) {
+      window.setTimeout(() => focusHashAnchor(anchor, attempts - 1), 220);
+    }
+    return;
+  }
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  highlightLinkedTarget(target);
 };
 
 const renderManageTools = () => {
@@ -1066,6 +1214,17 @@ const groupDayItems = (items) => {
       return;
     }
     const prev = current[current.length - 1];
+    const prevCarousel = String(prev && prev.carouselKey ? prev.carouselKey : '').trim();
+    const currCarousel = String(item && item.carouselKey ? item.carouselKey : '').trim();
+    if (prevCarousel || currCarousel) {
+      if (prevCarousel && prevCarousel === currCarousel) {
+        current.push(item);
+        return;
+      }
+      groups.push(current);
+      current = [item];
+      return;
+    }
     if (shouldGroupAsBurst(prev, item)) {
       current.push(item);
       return;
@@ -1104,6 +1263,17 @@ const buildGroupTimeRangeLabel = (items) => {
   return start === end ? start : `${start}-${end}`;
 };
 
+const hasWhatsAppSharedItems = (items) => (items || []).some((it) => !!(it && it.whatsappShared));
+
+const buildSourceBadge = (items, className) => {
+  if (!hasWhatsAppSharedItems(items)) return null;
+  const badge = document.createElement('div');
+  badge.className = className;
+  badge.textContent = I18N[currentLang].whatsapp_badge;
+  badge.title = I18N[currentLang].whatsapp_badge;
+  return badge;
+};
+
 const buildGroupPlaceLabel = (items) => {
   const places = (items || [])
     .map((it) => String(it && it.place ? it.place : '').trim())
@@ -1126,10 +1296,12 @@ const buildWhereBadge = (whereLabel, item, className) => {
   const label = String(whereLabel || '').trim();
   if (!label) return null;
   const mapsUrl = getGoogleMapsUrl(item && item.lat, item && item.lon);
-  const displayLabel = label;
+  const estimated = !!(item && item.gpsInferred);
+  const displayLabel = estimated ? `${label} · ${I18N[currentLang].gps_estimated}` : label;
   if (mapsUrl) {
     const link = document.createElement('a');
     link.className = `${className} ${className}--link`;
+    if (estimated) link.classList.add(`${className}--estimated`);
     link.href = mapsUrl;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
@@ -1148,16 +1320,19 @@ const buildModalWhereBadge = (whereLabel, item) => {
   const label = String(whereLabel || '').trim();
   if (!label) return null;
   const mapsUrl = getGoogleMapsUrl(item && item.lat, item && item.lon);
-  if (!mapsUrl) return buildWhereBadge(label, item, 'modal__where');
+  const estimated = !!(item && item.gpsInferred);
+  const displayLabel = estimated ? `${label} · ${I18N[currentLang].gps_estimated}` : label;
+  if (!mapsUrl) return buildWhereBadge(displayLabel, item, 'modal__where');
   const link = document.createElement('a');
   link.className = 'modal__where modal__where--link';
+  if (estimated) link.classList.add('modal__where--estimated');
   link.href = mapsUrl;
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
-  link.title = `${label} · Google Maps`;
+  link.title = `${displayLabel} · Google Maps`;
   const main = document.createElement('span');
   main.className = 'modal__where-main';
-  main.textContent = label;
+  main.textContent = displayLabel;
   const cta = document.createElement('span');
   cta.className = 'modal__where-cta';
   cta.textContent = 'Google Maps ↗';
@@ -1172,6 +1347,11 @@ const getGroupContextItems = (item) => {
   if (Array.isArray(group) && group.length) return group;
   return [item];
 };
+
+const pickGroupWhereRef = (items, fallback) =>
+  (items || []).find((it) => hasMapsCoordinates(it) && !it.gpsInferred)
+  || (items || []).find(hasMapsCoordinates)
+  || fallback;
 
 const buildItemWhereLabel = (item) => {
   if (!item) return '';
@@ -1191,6 +1371,7 @@ const buildMediaCard = (groupItems) => {
   if (!item) return document.createElement('div');
   const card = document.createElement('div');
   card.className = 'media-card';
+  if (item.id) card.id = `media-${item.id}`;
   const itemIds = items.map((it) => String(it.id || '')).filter(Boolean);
   const selectedCount = itemIds.filter((id) => selectedIds.has(id)).length;
   const itemSelected = selectedCount > 0;
@@ -1286,9 +1467,15 @@ const buildMediaCard = (groupItems) => {
     items.length > 1 ? buildGroupPlaceLabel(items) : String(item.place || '').trim()
   );
   if (whereLabel) {
-    const whereRef = items.find(hasMapsCoordinates) || item;
+    const whereRef = pickGroupWhereRef(items, item);
     const whereBadge = buildWhereBadge(whereLabel, whereRef, 'media-where');
     if (whereBadge) card.appendChild(whereBadge);
+  }
+  const sourceBadge = buildSourceBadge(items, 'media-source');
+  if (sourceBadge) card.appendChild(sourceBadge);
+  if (item.id) {
+    const shareBtn = createShareButton(`media-${item.id}`, 'media-share');
+    card.appendChild(shareBtn);
   }
 
   card.appendChild(selectBtn);
@@ -1383,10 +1570,16 @@ const buildDay = (day, idx, isPortfolio) => {
   const notesText = getNote(day);
   const notes = document.createElement('div');
   notes.className = 'notes';
+  notes.id = `note-${day.date}`;
+  const notesHead = document.createElement('div');
+  notesHead.className = 'notes__head';
   const notesLabel = document.createElement('div');
   notesLabel.className = 'notes__label';
   notesLabel.setAttribute('data-notes-label', '1');
   notesLabel.textContent = I18N[currentLang].notes_label;
+  const notesShare = createShareButton(`note-${day.date}`, 'notes__share');
+  notesHead.appendChild(notesLabel);
+  notesHead.appendChild(notesShare);
   const notesBody = document.createElement('div');
   if (notesText) {
     notesBody.innerHTML = renderNoteHtml(notesText);
@@ -1394,7 +1587,7 @@ const buildDay = (day, idx, isPortfolio) => {
     notesBody.setAttribute('data-empty-note', '1');
     notesBody.textContent = I18N[currentLang].empty_note;
   }
-  notes.appendChild(notesLabel);
+  notes.appendChild(notesHead);
   notes.appendChild(notesBody);
 
   const grid = document.createElement('div');
@@ -1458,6 +1651,7 @@ const buildDay = (day, idx, isPortfolio) => {
 };
 
 const toRad = (deg) => (Number(deg) * Math.PI) / 180;
+const MINI_MAP_MAX_LINK_KM = 100;
 const distanceMeters = (a, b) => {
   if (!a || !b) return Number.POSITIVE_INFINITY;
   const lat1 = Number(a.lat);
@@ -1472,6 +1666,62 @@ const distanceMeters = (a, b) => {
   const h = Math.sin(dLat / 2) ** 2
     + Math.cos(rLat1) * Math.cos(rLat2) * Math.sin(dLon / 2) ** 2;
   return 2 * 6371000 * Math.asin(Math.sqrt(h));
+};
+
+const buildFlightCurve = (from, to, segments = 20) => {
+  const lat1 = Number(from && from[0]);
+  const lon1 = Number(from && from[1]);
+  const lat2 = Number(to && to[0]);
+  const lon2 = Number(to && to[1]);
+  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return [from, to];
+  const dx = lon2 - lon1;
+  const dy = lat2 - lat1;
+  const len = Math.hypot(dx, dy);
+  if (!len) return [[lat1, lon1], [lat2, lon2]];
+  const nx = -dy / len;
+  const ny = dx / len;
+  const bend = len * 0.22;
+  const midLat = (lat1 + lat2) / 2;
+  const midLon = (lon1 + lon2) / 2;
+  const cLat = midLat - ny * bend;
+  const cLon = midLon - nx * bend;
+  const points = [];
+  for (let i = 0; i <= segments; i += 1) {
+    const t = i / segments;
+    const mt = 1 - t;
+    const lat = mt * mt * lat1 + 2 * mt * t * cLat + t * t * lat2;
+    const lon = mt * mt * lon1 + 2 * mt * t * cLon + t * t * lon2;
+    points.push([lat, lon]);
+  }
+  return points;
+};
+
+const splitTrackForFlights = (points, maxJumpKm = MINI_MAP_MAX_LINK_KM) => {
+  const latlngs = (points || [])
+    .map((p) => [Number(p.lat), Number(p.lon)])
+    .filter((ll) => Number.isFinite(ll[0]) && Number.isFinite(ll[1]));
+  if (!latlngs.length) return { ground: [], flights: [] };
+
+  const ground = [];
+  const flights = [];
+  let current = [latlngs[0]];
+  for (let i = 1; i < latlngs.length; i += 1) {
+    const prev = latlngs[i - 1];
+    const curr = latlngs[i];
+    const jumpKm = distanceMeters(
+      { lat: prev[0], lon: prev[1] },
+      { lat: curr[0], lon: curr[1] }
+    ) / 1000;
+    if (Number.isFinite(jumpKm) && jumpKm > maxJumpKm) {
+      if (current.length >= 2) ground.push(current);
+      flights.push({ from: prev, to: curr, km: jumpKm });
+      current = [curr];
+    } else {
+      current.push(curr);
+    }
+  }
+  if (current.length >= 2) ground.push(current);
+  return { ground, flights };
 };
 
 const simplifyTrackPoints = (points, minDistM = 10) => {
@@ -1575,7 +1825,7 @@ const buildDayTrackCard = (dayKey) => {
   label.textContent = I18N[currentLang].mini_map;
   const open = document.createElement('a');
   open.className = 'day-track__open';
-  open.href = 'map.html';
+  open.href = `map.html?day=${encodeURIComponent(String(dayKey || ''))}`;
   open.textContent = I18N[currentLang].open_map;
   head.appendChild(label);
   head.appendChild(open);
@@ -1756,7 +2006,11 @@ const renderMiniMap = (dayKey, dayIndex = null) => {
   try {
     const body = document.getElementById('mini-map-body');
     const dateEl = document.getElementById('mini-map-date');
+    const openLink = document.querySelector('.mini-map__open');
     if (dateEl) dateEl.textContent = formatDate(dayKey);
+    if (openLink) {
+      openLink.href = `map.html?upto=${encodeURIComponent(String(dayKey || ''))}`;
+    }
 
     const hasIndex = Number.isInteger(dayIndex) && dayIndex >= 0 && dayIndex < renderedDayOrder.length;
     const dayKeysToDraw = hasIndex ? renderedDayOrder.slice(0, dayIndex + 1) : [dayKey];
@@ -1786,13 +2040,36 @@ const renderMiniMap = (dayKey, dayIndex = null) => {
     let bounds = null;
     dayTracks.forEach((pts, idx) => {
       const isCurrent = idx === dayTracks.length - 1;
-      const latlngs = pts.map((p) => [p.lat, p.lon]);
-      const line = L.polyline(latlngs, {
-        color: isCurrent ? '#b06c36' : '#cfa782',
-        weight: isCurrent ? 3 : 2,
-        opacity: isCurrent ? 0.9 : 0.6
+      const split = splitTrackForFlights(pts, MINI_MAP_MAX_LINK_KM);
+      split.ground.forEach((segment) => {
+        const line = L.polyline(segment, {
+          color: isCurrent ? '#b06c36' : '#cfa782',
+          weight: isCurrent ? 3 : 2,
+          opacity: isCurrent ? 0.9 : 0.6
+        });
+        line.addTo(miniLayer);
+        bounds = bounds ? bounds.extend(line.getBounds()) : line.getBounds();
       });
-      line.addTo(miniLayer);
+      split.flights.forEach((flight) => {
+        const curve = buildFlightCurve(flight.from, flight.to);
+        const flightLine = L.polyline(curve, {
+          color: isCurrent ? '#5f7fa7' : '#9db0c9',
+          weight: isCurrent ? 2.5 : 2,
+          opacity: isCurrent ? 0.9 : 0.65,
+          dashArray: '6 6'
+        }).addTo(miniLayer);
+        const mid = curve[Math.floor(curve.length / 2)] || flight.from;
+        L.marker(mid, {
+          icon: L.divIcon({
+            className: 'map-flight-icon map-flight-icon--mini',
+            html: '<span class="map-flight-glyph">✈</span>',
+            iconSize: [22, 22],
+            iconAnchor: [11, 11]
+          })
+        }).addTo(miniLayer);
+        bounds = bounds ? bounds.extend(flightLine.getBounds()) : flightLine.getBounds();
+      });
+      const latlngs = pts.map((p) => [p.lat, p.lon]).filter((ll) => Number.isFinite(ll[0]) && Number.isFinite(ll[1]));
       latlngs.forEach((ll) => {
         L.circleMarker(ll, {
           radius: isCurrent ? 3 : 2.5,
@@ -1801,7 +2078,6 @@ const renderMiniMap = (dayKey, dayIndex = null) => {
           fillOpacity: isCurrent ? 0.85 : 0.45
         }).addTo(miniLayer);
       });
-      bounds = bounds ? bounds.extend(line.getBounds()) : line.getBounds();
     });
     if (bounds && bounds.isValid()) {
       map.fitBounds(bounds, { padding: [10, 10], animate: false });
@@ -1838,13 +2114,14 @@ const observeSections = () => {
 
   let activeIndex = -1;
   let ticking = false;
-  const AUTO_UNLOCK_DELAY_MS = 1000;
+  const SCROLL_IDLE_DELAY_MS = 1000;
   const unlockQueue = [];
   const unlockQueuedKeys = new Set();
   const sectionIndexByDayKey = new Map(
     sections.map((sectionEl, idx) => [sectionEl.id.replace('day-', ''), idx])
   );
   let unlockDrainTimer = null;
+  let scrollIdleTimer = null;
   const clickUnlockIfNeeded = (sectionEl) => {
     if (!sectionEl) return false;
     const dayKey = sectionEl.id.replace('day-', '');
@@ -1868,7 +2145,7 @@ const observeSections = () => {
     const task = {
       dayKey,
       sectionEl,
-      notBeforeTs: Date.now() + AUTO_UNLOCK_DELAY_MS
+      notBeforeTs: Date.now()
     };
     if (highPriority) unlockQueue.unshift(task);
     else unlockQueue.push(task);
@@ -1899,12 +2176,6 @@ const observeSections = () => {
     };
     unlockDrainTimer = window.setTimeout(drain, 10);
   };
-  const autoUnlockSection = (sectionEl) => {
-    if (!sectionEl) return;
-    const dayKey = sectionEl.id.replace('day-', '');
-    enqueueUnlock(dayKey, sectionEl);
-  };
-
   const setActiveIndex = (idx) => {
     if (idx < 0 || idx >= sections.length || idx === activeIndex) return;
     activeIndex = idx;
@@ -1912,7 +2183,6 @@ const observeSections = () => {
     ensureVisible(buttons[idx]);
     const activeSection = sections[idx];
     const dayKey = activeSection.id.replace('day-', '');
-    enqueueUnlock(dayKey, activeSection, true);
     renderMiniMap(dayKey, idx);
   };
 
@@ -1932,6 +2202,17 @@ const observeSections = () => {
     setActiveIndex(pickIndexFromScroll());
   };
 
+  const scheduleIdleUnlock = () => {
+    if (scrollIdleTimer) window.clearTimeout(scrollIdleTimer);
+    scrollIdleTimer = window.setTimeout(() => {
+      const idx = pickIndexFromScroll();
+      const sectionEl = sections[idx];
+      if (!sectionEl) return;
+      const dayKey = sectionEl.id.replace('day-', '');
+      enqueueUnlock(dayKey, sectionEl, true);
+    }, SCROLL_IDLE_DELAY_MS);
+  };
+
   const onScroll = () => {
     if (!ticking) {
       ticking = true;
@@ -1939,39 +2220,23 @@ const observeSections = () => {
     }
     window.requestAnimationFrame(recoverVisibleLazyMedia);
     window.requestAnimationFrame(ensureVisibleDayTrackMaps);
+    scheduleIdleUnlock();
   };
-
-  let sectionUnlockObserver = null;
-  if (typeof IntersectionObserver !== 'undefined') {
-    sectionUnlockObserver = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (!entry.isIntersecting) return;
-          autoUnlockSection(entry.target);
-        });
-      },
-      {
-        root: null,
-        rootMargin: '120px 0px',
-        threshold: 0.01
-      }
-    );
-    sections.forEach((section) => sectionUnlockObserver.observe(section));
-  }
 
   window.addEventListener('scroll', onScroll, { passive: true });
   window.addEventListener('resize', onScroll);
   setActiveIndex(0);
   onScroll();
+  scheduleIdleUnlock();
   recoverVisibleLazyMedia();
   ensureVisibleDayTrackMaps();
 
   cleanupSectionSync = () => {
     window.removeEventListener('scroll', onScroll);
     window.removeEventListener('resize', onScroll);
-    if (sectionUnlockObserver) {
-      sectionUnlockObserver.disconnect();
-      sectionUnlockObserver = null;
+    if (scrollIdleTimer) {
+      window.clearTimeout(scrollIdleTimer);
+      scrollIdleTimer = null;
     }
     if (unlockDrainTimer) {
       window.clearTimeout(unlockDrainTimer);
@@ -2026,10 +2291,14 @@ const renderView = () => {
   observeSections();
   renderDates();
   renderManageTools();
+  if (window.location.hash) {
+    window.setTimeout(() => focusHashAnchor(window.location.hash), 20);
+  }
 };
 
 const init = async () => {
   const content = document.getElementById('content');
+  const cacheBust = Date.now();
   const fail = (msg) => {
     if (content) {
       content.innerHTML = `<div class="loading">${msg}</div>`;
@@ -2038,11 +2307,15 @@ const init = async () => {
   try {
     let data = window.__CAMMINO_ENTRIES__;
     if (!data) {
-      const res = await fetch('data/entries.json');
+      const res = await fetch(withCacheBust('data/entries.json', cacheBust), {
+        cache: 'no-store'
+      });
       data = await res.json();
     }
     try {
-      const resTrackPoints = await fetch('data/track_points.json');
+      const resTrackPoints = await fetch(withCacheBust('data/track_points.json', cacheBust), {
+        cache: 'no-store'
+      });
       if (resTrackPoints.ok) {
         const trackPoints = await resTrackPoints.json();
         enrichDataWithTrackPoints(data, trackPoints);
@@ -2056,7 +2329,7 @@ const init = async () => {
     renderView();
 
     // Load mini-map data asynchronously (should never block photos)
-    fetch('data/track_by_day.json')
+    fetch(withCacheBust('data/track_by_day.json', cacheBust), { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         trackByDay = json || null;
@@ -2102,6 +2375,9 @@ window.addEventListener('DOMContentLoaded', () => {
     });
     setLang('it');
     renderManageTools();
+    window.addEventListener('hashchange', () => {
+      focusHashAnchor(window.location.hash);
+    });
     init();
   } catch (err) {
     const content = document.getElementById('content');
