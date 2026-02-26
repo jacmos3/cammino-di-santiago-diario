@@ -16,9 +16,14 @@ const I18N = {
     view_portfolio: 'Portfolio',
     notes_label: 'Note del giorno',
     empty_note: 'Aggiungi un ricordo personale qui.',
+    recommendations_label: 'Posti consigliati',
+    empty_recommendations:
+      "se questa sezione è vuota è perché non c'è niente di memorabile né in positivo né in negativo",
     mini_map: 'Percorso del giorno',
     mini_map_cumulative: 'Percorso cumulativo',
     open_map: 'Apri la mappa',
+    open_short: 'Apri Mappa',
+    strava_label: 'Strava',
     mini_map_empty: 'Nessun GPS per questo giorno.',
     gps_estimated: 'stimata',
     whatsapp_badge: 'Inoltrata su WhatsApp · orario non affidabile',
@@ -52,9 +57,14 @@ const I18N = {
     view_portfolio: 'Portfolio',
     notes_label: 'Day notes',
     empty_note: 'Add a personal memory here.',
+    recommendations_label: 'Recommended places',
+    empty_recommendations:
+      'If this section is empty, there was nothing particularly memorable, either positively or negatively.',
     mini_map: 'Daily route',
     mini_map_cumulative: 'Cumulative route',
     open_map: 'Open map',
+    open_short: 'Open Map',
+    strava_label: 'Strava',
     mini_map_empty: 'No GPS for this day.',
     gps_estimated: 'estimated',
     whatsapp_badge: 'Forwarded on WhatsApp · unreliable time',
@@ -90,7 +100,7 @@ const setLang = (lang) => {
   });
   document.querySelectorAll('[data-share-btn]').forEach((btn) => {
     if (btn.dataset.copied === '1') btn.textContent = '✓';
-    else btn.textContent = '↗';
+    else btn.innerHTML = getShareIconMarkup();
     btn.setAttribute('aria-label', I18N[lang].share);
     btn.setAttribute('title', I18N[lang].share);
   });
@@ -317,6 +327,20 @@ const formatDate = (dateStr) => {
   return fmt.format(date);
 };
 
+const DAY_ZERO_DATE = '2019-06-04';
+const getCamminoDayNumber = (dateStr) => {
+  const dateKey = String(dateStr || '').slice(0, 10);
+  if (!dateKey) return '';
+  if (dateKey === '2019-06-02') return '00';
+  if (dateKey === '2019-06-03') return '0';
+  const start = Date.parse(`${DAY_ZERO_DATE}T00:00:00`);
+  const current = Date.parse(`${dateKey}T00:00:00`);
+  if (Number.isNaN(start) || Number.isNaN(current)) return '';
+  const deltaDays = Math.round((current - start) / (24 * 60 * 60 * 1000));
+  if (deltaDays >= 0) return String(deltaDays + 1);
+  return '';
+};
+
 const renderDates = () => {
   if (!dataCache) return;
   document.querySelectorAll('[data-date-label]').forEach((el) => {
@@ -334,14 +358,21 @@ const renderDates = () => {
     el.textContent = I18N[currentLang].video_tag;
   });
   document.querySelectorAll('[data-day-label]').forEach((el) => {
-    const idx = el.getAttribute('data-day-label');
-    el.textContent = `${I18N[currentLang].day_label} ${idx}`;
+    const dayDate = el.getAttribute('data-day-label');
+    const num = getCamminoDayNumber(dayDate);
+    el.textContent = num ? `${I18N[currentLang].day_label} ${num}` : I18N[currentLang].day_label;
   });
   document.querySelectorAll('[data-notes-label]').forEach((el) => {
     el.textContent = I18N[currentLang].notes_label;
   });
   document.querySelectorAll('[data-empty-note]').forEach((el) => {
     el.textContent = I18N[currentLang].empty_note;
+  });
+  document.querySelectorAll('[data-recommendations-label]').forEach((el) => {
+    el.textContent = I18N[currentLang].recommendations_label;
+  });
+  document.querySelectorAll('[data-empty-recommendations]').forEach((el) => {
+    el.textContent = I18N[currentLang].empty_recommendations;
   });
   document.querySelectorAll('[data-i18n="mini_map"]').forEach((el) => {
     el.textContent = I18N[currentLang].mini_map;
@@ -908,6 +939,9 @@ const formatI18N = (key, vars = {}) => {
   return text;
 };
 
+const getShareIconMarkup = () =>
+  '<span class="share-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M12 3v11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.5 6.5L12 3l3.5 3.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.5 10.5H5.8a2.8 2.8 0 0 0-2.8 2.8v4.9A2.8 2.8 0 0 0 5.8 21h12.4a2.8 2.8 0 0 0 2.8-2.8v-4.9a2.8 2.8 0 0 0-2.8-2.8h-.7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
+
 const buildShareUrl = (anchorId) => {
   const url = new URL(window.location.href);
   url.hash = String(anchorId || '').trim();
@@ -945,7 +979,7 @@ const setShareButtonCopied = (btn) => {
   if (btn._shareCopiedTimer) window.clearTimeout(btn._shareCopiedTimer);
   btn._shareCopiedTimer = window.setTimeout(() => {
     btn.dataset.copied = '0';
-    btn.textContent = '↗';
+    btn.innerHTML = getShareIconMarkup();
   }, 1300);
 };
 
@@ -955,7 +989,7 @@ const createShareButton = (anchorId, className) => {
   btn.className = className;
   btn.setAttribute('data-share-btn', '1');
   btn.dataset.copied = '0';
-  btn.textContent = '↗';
+  btn.innerHTML = getShareIconMarkup();
   btn.setAttribute('aria-label', I18N[currentLang].share);
   btn.setAttribute('title', I18N[currentLang].share);
   btn.addEventListener('click', async (event) => {
@@ -1144,6 +1178,21 @@ document.addEventListener('keydown', (e) => {
 const getNote = (day) => {
   const note = day.notes || {};
   return (currentLang === 'it' ? note.it : note.en) || '';
+};
+
+const getRecommendations = (day) => {
+  const rec = day && day.recommendations ? day.recommendations : null;
+  if (!rec) return [];
+  const list = currentLang === 'it' ? rec.it : rec.en;
+  if (!Array.isArray(list)) return [];
+  return list.map((item) => String(item || '').trim()).filter(Boolean);
+};
+
+const getStravaLinks = (day) => {
+  const links = Array.isArray(day && day.strava) ? day.strava : [];
+  return links
+    .map((url) => String(url || '').trim())
+    .filter((url) => /^https?:\/\/(www\.)?strava\.com\/activities\/\d+/i.test(url));
 };
 
 const escapeHtml = (value) => String(value || '')
@@ -1546,7 +1595,7 @@ const buildDay = (day, idx, isPortfolio) => {
 
   const meta = document.createElement('div');
   meta.className = 'day__meta';
-  meta.setAttribute('data-day-label', idx + 1);
+  meta.setAttribute('data-day-label', day.date);
 
   const count = document.createElement('div');
   count.className = 'day__meta';
@@ -1563,6 +1612,21 @@ const buildDay = (day, idx, isPortfolio) => {
   header.appendChild(title);
   header.appendChild(meta);
   header.appendChild(count);
+  const stravaLinks = getStravaLinks(day);
+  if (stravaLinks.length) {
+    const stravaWrap = document.createElement('div');
+    stravaWrap.className = 'day__strava';
+    stravaLinks.forEach((url, linkIdx) => {
+      const a = document.createElement('a');
+      a.className = 'day__strava-link';
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = stravaLinks.length > 1 ? `${I18N[currentLang].strava_label} ${linkIdx + 1}` : I18N[currentLang].strava_label;
+      stravaWrap.appendChild(a);
+    });
+    header.appendChild(stravaWrap);
+  }
   header.appendChild(reloadDayBtn);
   
   const dayTrackCard = buildDayTrackCard(day.date);
@@ -1589,6 +1653,37 @@ const buildDay = (day, idx, isPortfolio) => {
   }
   notes.appendChild(notesHead);
   notes.appendChild(notesBody);
+
+  const recommendationsText = getRecommendations(day);
+  let recommendations = null;
+  if (recommendationsText.length > 0) {
+    recommendations = document.createElement('div');
+    recommendations.className = 'recommendations';
+    recommendations.id = `recommendations-${day.date}`;
+    const recommendationsHead = document.createElement('div');
+    recommendationsHead.className = 'recommendations__head';
+    const recommendationsLabel = document.createElement('div');
+    recommendationsLabel.className = 'recommendations__label';
+    recommendationsLabel.setAttribute('data-recommendations-label', '1');
+    recommendationsLabel.textContent = I18N[currentLang].recommendations_label;
+    const recommendationsShare = createShareButton(
+      `recommendations-${day.date}`,
+      'recommendations__share'
+    );
+    recommendationsHead.appendChild(recommendationsLabel);
+    recommendationsHead.appendChild(recommendationsShare);
+    const recommendationsBody = document.createElement('div');
+    const recommendationsList = document.createElement('ul');
+    recommendationsList.className = 'recommendations__list';
+    recommendationsText.forEach((item) => {
+      const li = document.createElement('li');
+      li.textContent = item;
+      recommendationsList.appendChild(li);
+    });
+    recommendationsBody.appendChild(recommendationsList);
+    recommendations.appendChild(recommendationsHead);
+    recommendations.appendChild(recommendationsBody);
+  }
 
   const grid = document.createElement('div');
   grid.className = isPortfolio ? 'grid grid--portfolio' : 'grid';
@@ -1643,6 +1738,7 @@ const buildDay = (day, idx, isPortfolio) => {
   if (!isPortfolio || notesText) {
     section.appendChild(notes);
   }
+  if (recommendations) section.appendChild(recommendations);
   if (!unlockedDayKeys.has(dayKey)) {
     section.appendChild(lockPanel);
   }
