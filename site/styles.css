@@ -187,29 +187,6 @@ h1, h2, h3 {
   color: #fffaf2;
 }
 
-.view-toggle {
-  display: inline-flex;
-  gap: 8px;
-  background: rgba(255, 250, 242, 0.7);
-  padding: 6px;
-  border-radius: 999px;
-  border: 1px solid rgba(31, 26, 22, 0.08);
-}
-
-.view-btn {
-  border: none;
-  background: transparent;
-  padding: 6px 12px;
-  border-radius: 999px;
-  font-weight: 600;
-  cursor: pointer;
-  color: var(--muted);
-}
-
-.view-btn.active {
-  background: var(--accent-2);
-  color: #fffaf2;
-}
 
 .hero__stats {
   display: grid;
@@ -439,10 +416,6 @@ h1, h2, h3 {
   gap: 14px;
 }
 
-.grid--portfolio {
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-}
-
 .media-card {
   position: relative;
   border-radius: 16px;
@@ -669,6 +642,14 @@ h1, h2, h3 {
   align-items: center;
   justify-content: center;
   cursor: pointer;
+}
+
+.media-card--no-select .media-share {
+  right: 8px;
+}
+
+.media-card--no-select .media-comment {
+  right: 38px;
 }
 
 .media-where--link {
@@ -946,8 +927,13 @@ h1, h2, h3 {
   gap: 8px;
 }
 
+.mini-map__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .mini-map__open {
-  margin-left: auto;
   text-transform: none;
   letter-spacing: 0;
   font-size: 0.82rem;
@@ -961,6 +947,19 @@ h1, h2, h3 {
 
 .mini-map__open:hover {
   filter: brightness(1.05);
+}
+
+.mini-map__toggle {
+  border: 1px solid rgba(31, 26, 22, 0.18);
+  background: #fffaf2;
+  color: var(--ink);
+  border-radius: 8px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  line-height: 1;
+  font-size: 1rem;
+  cursor: pointer;
 }
 
 .map-flight-icon {
@@ -1016,6 +1015,10 @@ h1, h2, h3 {
   border-radius: 12px;
   overflow: hidden;
   position: relative;
+}
+
+.mini-map.is-collapsed .mini-map__body {
+  display: none;
 }
 
 .mini-map__empty {
@@ -1481,8 +1484,9 @@ h1, h2, h3 {
   .footer__inner { flex-direction: column; }
   .mini-map {
     right: 12px;
-    left: 12px;
-    width: auto;
+    left: auto;
+    width: min(58vw, 220px);
+    min-width: 170px;
   }
   .modal__where {
     margin-right: 90px;

@@ -8,6 +8,8 @@ const I18N = {
     videos: 'Video',
     loading: 'Sto preparando il diario…',
     day_label: 'Giorno',
+    prologue_label: 'Prologo',
+    prologue_title: 'Prologo (2–3 giugno)',
     items_label: 'contenuti',
     photo_tag: 'Foto',
     video_tag: 'Video',
@@ -24,7 +26,11 @@ const I18N = {
     mini_map_cumulative: 'Percorso cumulativo',
     open_map: 'Apri la mappa',
     open_short: 'Apri Mappa',
+    mini_map_minimize: 'Minimizza mappa',
+    mini_map_expand: 'Espandi mappa',
     strava_label: 'Strava',
+    km_tracked_label: 'Tracciati',
+    km_cumulative_label: 'Cumulativo',
     mini_map_empty: 'Nessun GPS per questo giorno.',
     gps_estimated: 'stimata',
     whatsapp_badge: 'Inoltrata su WhatsApp · orario non affidabile',
@@ -63,6 +69,8 @@ const I18N = {
     videos: 'Videos',
     loading: 'Preparing the diary…',
     day_label: 'Day',
+    prologue_label: 'Prologue',
+    prologue_title: 'Prologue (June 2–3)',
     items_label: 'items',
     photo_tag: 'Photo',
     video_tag: 'Video',
@@ -79,7 +87,11 @@ const I18N = {
     mini_map_cumulative: 'Cumulative route',
     open_map: 'Open map',
     open_short: 'Open Map',
+    mini_map_minimize: 'Minimize map',
+    mini_map_expand: 'Expand map',
     strava_label: 'Strava',
+    km_tracked_label: 'Tracked',
+    km_cumulative_label: 'Cumulative',
     mini_map_empty: 'No GPS for this day.',
     gps_estimated: 'estimated',
     whatsapp_badge: 'Forwarded on WhatsApp · unreliable time',
@@ -112,7 +124,6 @@ const I18N = {
 };
 
 let currentLang = 'it';
-let currentView = 'diary';
 
 const setLang = (lang) => {
   currentLang = lang;
@@ -168,6 +179,11 @@ const commentCounts = new Map();
 const commentThreads = new Map();
 let commentsModalTarget = '';
 let adminAuthenticated = false;
+let miniMapCollapsed = false;
+const MINI_MAP_COLLAPSED_KEY = 'cammino_minimap_collapsed_v1';
+const dayDistanceKmByDate = new Map();
+const dayDistanceCumKmByDate = new Map();
+const nonTrackedDayKeys = new Set();
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const PHOTO_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp']);
@@ -270,24 +286,29 @@ const getJsonWithApiFallback = async (path) => {
 };
 
 const getAdminSessionStatus = async () => {
+  const prev = adminAuthenticated;
   try {
     const payload = await getJsonWithApiFallback('/api/admin/session');
     adminAuthenticated = !!(payload && payload.authenticated);
     renderManageTools();
+    if (dataCache && prev !== adminAuthenticated) renderView();
     return adminAuthenticated;
   } catch {
     adminAuthenticated = false;
     renderManageTools();
+    if (dataCache && prev !== adminAuthenticated) renderView();
     return false;
   }
 };
 
 const loginAdminSession = async (token) => {
+  const prev = adminAuthenticated;
   const value = String(token || '').trim();
   if (!value) return false;
   const { payload } = await postJsonWithApiFallback('/api/admin/session', { token: value });
   adminAuthenticated = !!(payload && payload.authenticated);
   renderManageTools();
+  if (dataCache && prev !== adminAuthenticated) renderView();
   return adminAuthenticated;
 };
 
@@ -504,6 +525,82 @@ const formatDate = (dateStr) => {
 };
 
 const DAY_ZERO_DATE = '2019-06-04';
+const PROLOGUE_DATES = ['2019-06-02', '2019-06-03'];
+const PROLOGUE_TRACK_DATE = '2019-06-03';
+
+const isPrologueDay = (day) => Boolean(day && day.isPrologue);
+
+const getDayTitle = (day) => {
+  if (isPrologueDay(day)) return I18N[currentLang].prologue_title;
+  return formatDate(String(day && day.date ? day.date : ''));
+};
+
+const getDayLabelText = (day) => {
+  if (isPrologueDay(day)) return I18N[currentLang].prologue_label;
+  const num = getCamminoDayNumber(day && day.date);
+  return num ? `${I18N[currentLang].day_label} ${num}` : I18N[currentLang].day_label;
+};
+
+const buildPrologueNarrative = (lang = 'it') => {
+  if (lang === 'en') {
+    return [
+      '**Title**',
+      'Prologue: departure and approach.',
+      '',
+      '**Where / stage**',
+      'June 2 and 3 were transition days: transfer from Perugia to Bergamo, then evening flight to Lourdes.',
+      '',
+      '**Key scene**',
+      'The journey started before the trail: BlaBlaCar from Perugia to Milan, then train to Orio to reach friends in Bergamo. The next morning I took a borrowed bike and rode around the city, crossed paths with donkeys, and used those hours to settle into the right mindset. In the evening, departure finally became real with the flight.',
+      '',
+      '**What I realized**',
+      'The Camino does not begin at the first trail marker, but in the choices, transfers, and waiting that prepare your head and pace.',
+      '',
+      '**Practical note**',
+      'Logistics day: Perugia-Milan by BlaBlaCar, Milan-Orio by train, one night hosted by friends in Bergamo, then evening flight on June 3.'
+    ].join('\n');
+  }
+  return [
+    '**Titolo**',
+    'Prologo: partire prima di partire.',
+    '',
+    '**Dove ero / tappa**',
+    'Il 2 e il 3 giugno sono stati i giorni di avvicinamento: da Perugia a Bergamo, poi volo serale verso Lourdes.',
+    '',
+    '**Scena chiave**',
+    'Il cammino è iniziato prima del sentiero. Il 2 giugno ho fatto Perugia-Milano in BlaBlaCar e Milano-Orio in treno per raggiungere amici che mi avrebbero ospitato una notte. Il 3 mattina, a Bergamo, ho fatto un giro in bici con una bicicletta prestatami: aria leggera, ritmo lento, anche incontro con degli asini lungo il percorso. In serata è arrivato il volo: da lì in poi non era più preparazione, era inizio vero.',
+    '',
+    '**Una cosa che ho capito**',
+    'Il primo passo del cammino non coincide con il primo chilometro a piedi: comincia nelle scelte logistiche, nell’attesa e nel modo in cui ti predisponi al viaggio.',
+    '',
+    '**Nota pratica**',
+    'Trasferimento Perugia-Milano con BlaBlaCar, treno Milano-Orio, notte a Bergamo da amici, poi volo serale del 3 giugno.'
+  ].join('\n');
+};
+
+const parseDistanceKeys = (raw) =>
+  String(raw || '')
+    .split(',')
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+
+const getDistanceBadgeText = (distanceKeyAttr) => {
+  const keys = parseDistanceKeys(distanceKeyAttr);
+  if (!keys.length) return '';
+  let km = 0;
+  let cumKm = 0;
+  keys.forEach((key) => {
+    km += Number(dayDistanceKmByDate.get(key) || 0);
+  });
+  const lastKey = keys[keys.length - 1];
+  cumKm = Number(dayDistanceCumKmByDate.get(lastKey) || 0);
+  if (km <= 0) return '';
+  return (
+    `${I18N[currentLang].km_tracked_label}: ${km.toFixed(1)} km · ` +
+    `${I18N[currentLang].km_cumulative_label}: ${cumKm.toFixed(1)} km`
+  );
+};
+
 const getCamminoDayNumber = (dateStr) => {
   const dateKey = String(dateStr || '').slice(0, 10);
   if (!dateKey) return '';
@@ -520,8 +617,12 @@ const getCamminoDayNumber = (dateStr) => {
 const renderDates = () => {
   if (!dataCache) return;
   document.querySelectorAll('[data-date-label]').forEach((el) => {
-    const dateStr = el.getAttribute('data-date-label');
-    el.textContent = formatDate(dateStr);
+    const dateStr = String(el.getAttribute('data-date-label') || '');
+    if (el.getAttribute('data-prologue-title') === '1') {
+      el.textContent = I18N[currentLang].prologue_title;
+    } else {
+      el.textContent = formatDate(dateStr);
+    }
   });
   document.querySelectorAll('[data-items-count]').forEach((el) => {
     const count = el.getAttribute('data-items-count');
@@ -534,9 +635,13 @@ const renderDates = () => {
     el.textContent = I18N[currentLang].video_tag;
   });
   document.querySelectorAll('[data-day-label]').forEach((el) => {
-    const dayDate = el.getAttribute('data-day-label');
-    const num = getCamminoDayNumber(dayDate);
-    el.textContent = num ? `${I18N[currentLang].day_label} ${num}` : I18N[currentLang].day_label;
+    const dayDate = String(el.getAttribute('data-day-label') || '');
+    if (el.getAttribute('data-prologue-label') === '1') {
+      el.textContent = I18N[currentLang].prologue_label;
+    } else {
+      const num = getCamminoDayNumber(dayDate);
+      el.textContent = num ? `${I18N[currentLang].day_label} ${num}` : I18N[currentLang].day_label;
+    }
   });
   document.querySelectorAll('[data-notes-label]').forEach((el) => {
     el.textContent = I18N[currentLang].notes_label;
@@ -565,6 +670,27 @@ const renderDates = () => {
   document.querySelectorAll('[data-day-unlock-btn]').forEach((el) => {
     el.textContent = I18N[currentLang].unlock_day;
   });
+  document.querySelectorAll('[data-day-distance]').forEach((el) => {
+    const text = getDistanceBadgeText(el.getAttribute('data-day-distance'));
+    if (text) {
+      el.textContent = text;
+      el.style.display = '';
+    } else {
+      el.textContent = '';
+      el.style.display = 'none';
+    }
+  });
+  const miniMapToggle = document.getElementById('mini-map-toggle');
+  if (miniMapToggle) {
+    miniMapToggle.setAttribute(
+      'aria-label',
+      miniMapCollapsed ? I18N[currentLang].mini_map_expand : I18N[currentLang].mini_map_minimize
+    );
+    miniMapToggle.setAttribute(
+      'title',
+      miniMapCollapsed ? I18N[currentLang].mini_map_expand : I18N[currentLang].mini_map_minimize
+    );
+  }
 };
 
 const disconnectLazyMediaObserver = () => {
@@ -1850,27 +1976,32 @@ const buildMediaCard = (groupItems) => {
   const itemIds = items.map((it) => String(it.id || '')).filter(Boolean);
   const selectedCount = itemIds.filter((id) => selectedIds.has(id)).length;
   const itemSelected = selectedCount > 0;
-  const selectBtn = document.createElement('button');
-  selectBtn.type = 'button';
-  selectBtn.className = 'media-select';
-  selectBtn.setAttribute('aria-checked', 'false');
-  selectBtn.setAttribute('aria-label', 'Seleziona elemento');
-  selectBtn.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const beforeCount = itemIds.filter((id) => selectedIds.has(id)).length;
-    const shouldSelectAll = beforeCount !== itemIds.length;
-    itemIds.forEach((id) => {
-      if (shouldSelectAll) selectedIds.add(id);
-      else selectedIds.delete(id);
+  let selectBtn = null;
+  if (adminAuthenticated) {
+    selectBtn = document.createElement('button');
+    selectBtn.type = 'button';
+    selectBtn.className = 'media-select';
+    selectBtn.setAttribute('aria-checked', 'false');
+    selectBtn.setAttribute('aria-label', 'Seleziona elemento');
+    selectBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const beforeCount = itemIds.filter((id) => selectedIds.has(id)).length;
+      const shouldSelectAll = beforeCount !== itemIds.length;
+      itemIds.forEach((id) => {
+        if (shouldSelectAll) selectedIds.add(id);
+        else selectedIds.delete(id);
+      });
+      const afterCount = itemIds.filter((id) => selectedIds.has(id)).length;
+      setCardSelectedState(card, selectBtn, afterCount > 0);
+      if (afterCount > 0 && afterCount < itemIds.length) {
+        selectBtn.textContent = String(afterCount);
+      }
+      renderManageTools();
     });
-    const afterCount = itemIds.filter((id) => selectedIds.has(id)).length;
-    setCardSelectedState(card, selectBtn, afterCount > 0);
-    if (afterCount > 0 && afterCount < itemIds.length) {
-      selectBtn.textContent = String(afterCount);
-    }
-    renderManageTools();
-  });
+  } else {
+    card.classList.add('media-card--no-select');
+  }
 
   if (item.type === 'image') {
     const img = document.createElement('img');
@@ -1965,9 +2096,9 @@ const buildMediaCard = (groupItems) => {
     card.appendChild(commentBtn);
   }
 
-  card.appendChild(selectBtn);
+  if (selectBtn) card.appendChild(selectBtn);
   setCardSelectedState(card, selectBtn, itemSelected);
-  if (selectedCount > 0 && selectedCount < itemIds.length) {
+  if (selectBtn && selectedCount > 0 && selectedCount < itemIds.length) {
     selectBtn.textContent = String(selectedCount);
   }
 
@@ -2017,7 +2148,7 @@ const buildMediaCard = (groupItems) => {
   return card;
 };
 
-const buildDay = (day, idx, isPortfolio) => {
+const buildDay = (day, idx) => {
   const section = document.createElement('section');
   section.className = 'day reveal';
   section.style.setProperty('--delay', `${Math.min(idx * 0.05, 0.4)}s`);
@@ -2029,16 +2160,27 @@ const buildDay = (day, idx, isPortfolio) => {
   const title = document.createElement('h2');
   title.className = 'day__title';
   title.setAttribute('data-date-label', day.date);
-  title.textContent = formatDate(day.date);
+  if (isPrologueDay(day)) title.setAttribute('data-prologue-title', '1');
+  title.textContent = getDayTitle(day);
 
   const meta = document.createElement('div');
   meta.className = 'day__meta';
   meta.setAttribute('data-day-label', day.date);
+  if (isPrologueDay(day)) meta.setAttribute('data-prologue-label', '1');
+  meta.textContent = getDayLabelText(day);
 
   const count = document.createElement('div');
   count.className = 'day__meta';
   count.setAttribute('data-items-count', day.items.length);
   count.textContent = `${day.items.length} ${I18N[currentLang].items_label}`;
+  const distance = document.createElement('div');
+  distance.className = 'day__meta';
+  distance.setAttribute(
+    'data-day-distance',
+    Array.isArray(day.distanceKeys) && day.distanceKeys.length ? day.distanceKeys.join(',') : day.date
+  );
+  distance.textContent = '';
+  distance.style.display = 'none';
 
   const reloadDayBtn = document.createElement('button');
   reloadDayBtn.type = 'button';
@@ -2050,6 +2192,7 @@ const buildDay = (day, idx, isPortfolio) => {
   header.appendChild(title);
   header.appendChild(meta);
   header.appendChild(count);
+  header.appendChild(distance);
   const stravaLinks = getStravaLinks(day);
   if (stravaLinks.length) {
     const stravaWrap = document.createElement('div');
@@ -2067,7 +2210,7 @@ const buildDay = (day, idx, isPortfolio) => {
   }
   header.appendChild(reloadDayBtn);
   
-  const dayTrackCard = buildDayTrackCard(day.date);
+  const dayTrackCard = isPrologueDay(day) ? null : buildDayTrackCard(day.trackDate || day.date);
 
   const notesText = getNote(day);
   const notes = document.createElement('div');
@@ -2129,7 +2272,7 @@ const buildDay = (day, idx, isPortfolio) => {
   }
 
   const grid = document.createElement('div');
-  grid.className = isPortfolio ? 'grid grid--portfolio' : 'grid';
+  grid.className = 'grid';
   const lockPanel = document.createElement('div');
   lockPanel.className = 'day-lock';
   const lockMsg = document.createElement('div');
@@ -2177,10 +2320,8 @@ const buildDay = (day, idx, isPortfolio) => {
   }
 
   section.appendChild(header);
-  section.appendChild(dayTrackCard);
-  if (!isPortfolio || notesText) {
-    section.appendChild(notes);
-  }
+  if (dayTrackCard) section.appendChild(dayTrackCard);
+  section.appendChild(notes);
   if (recommendations) section.appendChild(recommendations);
   if (!unlockedDayKeys.has(dayKey)) {
     section.appendChild(lockPanel);
@@ -2205,6 +2346,54 @@ const distanceMeters = (a, b) => {
   const h = Math.sin(dLat / 2) ** 2
     + Math.cos(rLat1) * Math.cos(rLat2) * Math.sin(dLon / 2) ** 2;
   return 2 * 6371000 * Math.asin(Math.sqrt(h));
+};
+
+const parsePointTimestamp = (point) => {
+  const ts = Date.parse(String(point && point.time ? point.time : ''));
+  return Number.isNaN(ts) ? Number.NEGATIVE_INFINITY : ts;
+};
+
+const computeDayDistanceKmFromTrack = (byDay) => {
+  dayDistanceKmByDate.clear();
+  if (!byDay || typeof byDay !== 'object') return;
+  Object.entries(byDay).forEach(([dayKey, rawPoints]) => {
+    const points = Array.isArray(rawPoints) ? rawPoints : [];
+    const groups = new Map();
+    points.forEach((p) => {
+      const file = String(p && p.file ? p.file : '');
+      if (!file.startsWith('RUNTASTIC_')) return;
+      const lat = Number(p && p.lat);
+      const lon = Number(p && p.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+      if (!groups.has(file)) groups.set(file, []);
+      groups.get(file).push({ lat, lon, ts: parsePointTimestamp(p) });
+    });
+    let totalMeters = 0;
+    groups.forEach((arr) => {
+      arr.sort((a, b) => a.ts - b.ts);
+      for (let i = 1; i < arr.length; i += 1) {
+        const meters = distanceMeters(arr[i - 1], arr[i]);
+        if (Number.isFinite(meters) && meters > 0) totalMeters += meters;
+      }
+    });
+    const key = String(dayKey || '').slice(0, 10);
+    if (!key) return;
+    if (totalMeters > 0) dayDistanceKmByDate.set(key, totalMeters / 1000);
+  });
+};
+
+const recomputeCumulativeDayDistanceKm = (orderedDayKeys) => {
+  dayDistanceCumKmByDate.clear();
+  let sum = 0;
+  (orderedDayKeys || []).forEach((dayKey) => {
+    if (nonTrackedDayKeys.has(String(dayKey || ''))) {
+      dayDistanceCumKmByDate.set(dayKey, sum);
+      return;
+    }
+    const km = Number(dayDistanceKmByDate.get(dayKey) || 0);
+    if (km > 0) sum += km;
+    dayDistanceCumKmByDate.set(dayKey, sum);
+  });
 };
 
 const buildFlightCurve = (from, to, segments = 20) => {
@@ -2513,7 +2702,7 @@ const buildTimelineNav = (days) => {
   nav.innerHTML = '';
   days.forEach((day, idx) => {
     const btn = document.createElement('button');
-    btn.textContent = formatDate(day.date);
+    btn.textContent = isPrologueDay(day) ? I18N[currentLang].prologue_label : formatDate(day.date);
     btn.addEventListener('click', () => {
       document.getElementById(`day-${day.date}`).scrollIntoView({ behavior: 'smooth' });
     });
@@ -2544,6 +2733,36 @@ const ensureMiniMap = () => {
   return miniMap;
 };
 
+const applyMiniMapCollapsed = (collapsed, persist = true) => {
+  miniMapCollapsed = !!collapsed;
+  const wrap = document.getElementById('mini-map');
+  const toggle = document.getElementById('mini-map-toggle');
+  if (wrap) wrap.classList.toggle('is-collapsed', miniMapCollapsed);
+  if (toggle) {
+    toggle.textContent = miniMapCollapsed ? '+' : '–';
+    toggle.setAttribute(
+      'aria-label',
+      miniMapCollapsed ? I18N[currentLang].mini_map_expand : I18N[currentLang].mini_map_minimize
+    );
+    toggle.setAttribute(
+      'title',
+      miniMapCollapsed ? I18N[currentLang].mini_map_expand : I18N[currentLang].mini_map_minimize
+    );
+  }
+  if (persist) {
+    try {
+      window.localStorage.setItem(MINI_MAP_COLLAPSED_KEY, miniMapCollapsed ? '1' : '0');
+    } catch {
+      // no-op
+    }
+  }
+  if (!miniMapCollapsed && miniMap) {
+    window.setTimeout(() => {
+      try { miniMap.invalidateSize(); } catch {}
+    }, 50);
+  }
+};
+
 const renderMiniMap = (dayKey, dayIndex = null) => {
   try {
     const body = document.getElementById('mini-map-body');
@@ -2559,6 +2778,7 @@ const renderMiniMap = (dayKey, dayIndex = null) => {
 
     const dayTracks = [];
     dayKeysToDraw.forEach((key) => {
+      if (nonTrackedDayKeys.has(String(key || ''))) return;
       const sourceByDay = normalizedTrackByDay || trackByDay;
       const pts = ((sourceByDay && sourceByDay[key]) || []).filter(isPhotoTrackPoint);
       if (pts.length) dayTracks.push(pts);
@@ -2658,6 +2878,7 @@ const observeSections = () => {
   let activeIndex = -1;
   let ticking = false;
   const SCROLL_IDLE_DELAY_MS = 1000;
+  const HASH_SYNC_DELAY_MS = 180;
   const unlockQueue = [];
   const unlockQueuedKeys = new Set();
   const sectionIndexByDayKey = new Map(
@@ -2665,6 +2886,18 @@ const observeSections = () => {
   );
   let unlockDrainTimer = null;
   let scrollIdleTimer = null;
+  let hashSyncTimer = null;
+  const scheduleNoteHashUpdate = (targetId) => {
+    const id = String(targetId || '').trim();
+    if (!id) return;
+    if (hashSyncTimer) window.clearTimeout(hashSyncTimer);
+    hashSyncTimer = window.setTimeout(() => {
+      const nextHash = `#${encodeURIComponent(id)}`;
+      if (window.location.hash === nextHash) return;
+      const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
+      window.history.replaceState(null, '', nextUrl);
+    }, HASH_SYNC_DELAY_MS);
+  };
   const clickUnlockIfNeeded = (sectionEl) => {
     if (!sectionEl) return false;
     const dayKey = sectionEl.id.replace('day-', '');
@@ -2727,6 +2960,7 @@ const observeSections = () => {
     const activeSection = sections[idx];
     const dayKey = activeSection.id.replace('day-', '');
     renderMiniMap(dayKey, idx);
+    scheduleNoteHashUpdate(`note-${dayKey}`);
   };
 
   const pickIndexFromScroll = () => {
@@ -2785,6 +3019,10 @@ const observeSections = () => {
       window.clearTimeout(unlockDrainTimer);
       unlockDrainTimer = null;
     }
+    if (hashSyncTimer) {
+      window.clearTimeout(hashSyncTimer);
+      hashSyncTimer = null;
+    }
     unlockQueue.length = 0;
     unlockQueuedKeys.clear();
   };
@@ -2799,15 +3037,71 @@ const renderView = () => {
     firefoxHydrationDrainTimer = null;
   }
   const data = dataCache;
-  const rawList = currentView === 'portfolio' ? data.portfolio : data.days;
-  const list = rawList.map((day) => ({
+  const rawList = data.days;
+  const prologueSource = rawList.filter((day) => PROLOGUE_DATES.includes(String(day && day.date || '').slice(0, 10)));
+  const baseList = rawList.filter((day) => !PROLOGUE_DATES.includes(String(day && day.date || '').slice(0, 10)));
+  let mergedPrologue = null;
+  if (prologueSource.length >= 2) {
+    const byDate = new Map(prologueSource.map((d) => [String(d.date).slice(0, 10), d]));
+    const dayA = byDate.get(PROLOGUE_DATES[0]);
+    const dayB = byDate.get(PROLOGUE_DATES[1]);
+    if (dayA && dayB) {
+      const mergeNoteField = (field) => {
+        const parts = [dayA, dayB]
+          .map((d) => String(((d && d.notes) || {})[field] || '').trim())
+          .filter(Boolean);
+        if (!parts.length) return '';
+        if (field === 'it' || field === 'en') return buildPrologueNarrative(field);
+        return parts.join('\n\n');
+      };
+      const mergeRecommendationsField = (field) => {
+        const items = [dayA, dayB]
+          .flatMap((d) => (((d && d.recommendations) || {})[field] || []))
+          .map((v) => String(v || '').trim())
+          .filter(Boolean);
+        return Array.from(new Set(items));
+      };
+      const mergedItems = [...(dayA.items || []), ...(dayB.items || [])];
+      mergedItems.sort((a, b) => {
+        const ta = parseItemTimestamp(a);
+        const tb = parseItemTimestamp(b);
+        if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta - tb;
+        if (Number.isFinite(ta) && !Number.isFinite(tb)) return -1;
+        if (!Number.isFinite(ta) && Number.isFinite(tb)) return 1;
+        return String((a && a.orig) || '').localeCompare(String((b && b.orig) || ''));
+      });
+      const mergedStrava = Array.from(
+        new Set([...(Array.isArray(dayA.strava) ? dayA.strava : []), ...(Array.isArray(dayB.strava) ? dayB.strava : [])])
+      );
+      mergedPrologue = {
+        date: PROLOGUE_TRACK_DATE,
+        isPrologue: true,
+        trackDate: PROLOGUE_TRACK_DATE,
+        distanceKeys: [],
+        items: mergedItems,
+        notes: { it: mergeNoteField('it'), en: mergeNoteField('en') },
+        recommendations: {
+          it: mergeRecommendationsField('it'),
+          en: mergeRecommendationsField('en')
+        },
+        strava: mergedStrava
+      };
+    }
+  }
+  const normalizedRawList = mergedPrologue ? [mergedPrologue, ...baseList] : rawList;
+  const list = normalizedRawList.map((day) => ({
     ...day,
     uiGroups: groupDayItems(day.items || [])
   }));
+  nonTrackedDayKeys.clear();
+  list.forEach((day) => {
+    if (isPrologueDay(day)) nonTrackedDayKeys.add(String(day.date || ''));
+  });
   if (!unlockedDayKeys.size && list.length) {
     unlockedDayKeys.add(list[0].date);
   }
   renderedDayOrder = list.map((day) => day.date);
+  recomputeCumulativeDayDistanceKm(renderedDayOrder);
   modalItems = list.flatMap((day) => (day.items || []));
   syncSelectedIdsWithCurrentData();
   modalIndexById = new Map();
@@ -2827,7 +3121,7 @@ const renderView = () => {
   const content = document.getElementById('content');
   content.innerHTML = '';
   list.forEach((day, idx) => {
-    content.appendChild(buildDay(day, idx, currentView === 'portfolio'));
+    content.appendChild(buildDay(day, idx));
   });
 
   buildTimelineNav(list);
@@ -2886,7 +3180,10 @@ const init = async () => {
       .then((json) => {
         trackByDay = json || null;
         normalizedTrackByDay = normalizeTrackByDayForActivities(trackByDay);
+        computeDayDistanceKmFromTrack(trackByDay);
+        recomputeCumulativeDayDistanceKm(renderedDayOrder);
         refreshDayTrackCards();
+        renderDates();
         if (data.days.length) {
           renderMiniMap(data.days[0].date, 0);
         }
@@ -2894,6 +3191,9 @@ const init = async () => {
       .catch(() => {
         trackByDay = null;
         normalizedTrackByDay = null;
+        dayDistanceKmByDate.clear();
+        recomputeCumulativeDayDistanceKm(renderedDayOrder);
+        renderDates();
       });
   } catch (err) {
     fail(`Errore nel caricamento: ${err.message || err}`);
@@ -2915,18 +3215,23 @@ window.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.lang__btn').forEach((btn) => {
       btn.addEventListener('click', () => setLang(btn.dataset.lang));
     });
-    document.querySelectorAll('.view-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        currentView = btn.dataset.view;
-        document.querySelectorAll('.view-btn').forEach((b) => {
-          b.classList.toggle('active', b.dataset.view === currentView);
-        });
-        renderView();
+    const miniMapToggle = document.getElementById('mini-map-toggle');
+    if (miniMapToggle) {
+      miniMapToggle.addEventListener('click', () => {
+        applyMiniMapCollapsed(!miniMapCollapsed, true);
       });
-    });
-    document.querySelectorAll('.view-btn').forEach((b) => {
-      b.classList.toggle('active', b.dataset.view === currentView);
-    });
+      let stored = null;
+      try {
+        stored = window.localStorage.getItem(MINI_MAP_COLLAPSED_KEY);
+      } catch {
+        stored = null;
+      }
+      if (stored === '1' || stored === '0') {
+        applyMiniMapCollapsed(stored === '1', false);
+      } else {
+        applyMiniMapCollapsed(window.innerWidth <= 720, false);
+      }
+    }
     setLang('it');
     renderManageTools();
     window.addEventListener('hashchange', () => {
