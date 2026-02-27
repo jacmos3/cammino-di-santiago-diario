@@ -11,7 +11,8 @@ const I18N = {
     items_label: 'contenuti',
     photo_tag: 'Foto',
     video_tag: 'Video',
-    footer_note: 'Creato automaticamente a partire dagli scatti originali.',
+    footer_note:
+      'Il sito è stato creato nel 2026, molti anni dopo l’esperienza vissuta, ma è stato ricostruito in modo molto fedele unendo il tracking del percorso registrato sul momento tramite Runtastic, i metadata (incluse coordinate GPS) estratti dalle foto e dai video, e i testi su stati d’animo ed eventi recuperati da vecchie note, messaggi, chat WhatsApp, audio, contenuti social e ricordi.',
     view_diary: 'Diario',
     view_portfolio: 'Portfolio',
     notes_label: 'Note del giorno',
@@ -49,7 +50,9 @@ const I18N = {
     comments_error: 'Errore nel caricamento commenti',
     comments_saved: 'Commento inviato',
     comments_target_media: 'Commenti foto/video',
-    comments_target_note: 'Commenti testo del giorno'
+    comments_target_note: 'Commenti testo del giorno',
+    legal_notice:
+      '© Tutti i diritti riservati. Foto, video e testi di questo sito non possono essere copiati, riutilizzati, ripubblicati o redistribuiti senza autorizzazione scritta dell’autore.'
   },
   en: {
     eyebrow: 'Travel diary',
@@ -63,7 +66,8 @@ const I18N = {
     items_label: 'items',
     photo_tag: 'Photo',
     video_tag: 'Video',
-    footer_note: 'Automatically generated from the original shots.',
+    footer_note:
+      'This site was created many years after the lived experience, but it was reconstructed very faithfully by combining route tracking recorded at the time with Runtastic, metadata (including GPS coordinates) extracted from photos and videos, and notes about emotions and events recovered from old notes, messages, audio, and memories.',
     view_diary: 'Diary',
     view_portfolio: 'Portfolio',
     notes_label: 'Day notes',
@@ -101,7 +105,9 @@ const I18N = {
     comments_error: 'Failed to load comments',
     comments_saved: 'Comment posted',
     comments_target_media: 'Media comments',
-    comments_target_note: 'Day text comments'
+    comments_target_note: 'Day text comments',
+    legal_notice:
+      '© All rights reserved. Photos, videos, and texts on this site may not be copied, reused, republished, or redistributed without prior written permission from the author.'
   }
 };
 
@@ -1472,7 +1478,6 @@ const refreshStats = () => {
   document.getElementById('stat-days').textContent = dataCache.days.length;
   document.getElementById('stat-photos').textContent = dataCache.counts.images;
   document.getElementById('stat-videos').textContent = dataCache.counts.videos;
-  document.getElementById('footer-meta').textContent = `Updated ${dataCache.generated_at}`;
 };
 
 const toggleSelectionById = (itemId, card, selectBtn) => {
@@ -2522,14 +2527,14 @@ const ensureMiniMap = () => {
   if (!body || typeof L === 'undefined') return null;
   if (!miniMap) {
     miniMap = L.map(body, {
-      zoomControl: false,
+      zoomControl: true,
       attributionControl: false,
-      dragging: false,
-      scrollWheelZoom: false,
-      doubleClickZoom: false,
+      dragging: true,
+      scrollWheelZoom: true,
+      doubleClickZoom: true,
       boxZoom: false,
       keyboard: false,
-      touchZoom: false,
+      touchZoom: true,
     });
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 18,
