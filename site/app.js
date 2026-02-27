@@ -32,13 +32,24 @@ const I18N = {
     select_mode: 'Seleziona',
     clear_selected: 'Deseleziona tutto',
     unlock_day: 'Ricarica contenuti',
-    day_locked: 'Contenuti non caricati per alleggerire la pagina.',
+    day_locked: 'Contenuti in caricamento. Attendi un istante.',
     delete_selected: 'Cancella selezionati',
     delete_confirm: 'Confermi la cancellazione definitiva di {count} file?',
     delete_success: '{count} file cancellati.',
     delete_error: 'Errore durante la cancellazione',
     deleting: 'Cancellazione...',
-    carousel: 'Carosello'
+    carousel: 'Carosello',
+    comments: 'Commenti',
+    comments_open: 'Apri commenti',
+    comments_name: 'Nome',
+    comments_text: 'Scrivi un commento',
+    comments_send: 'Invia',
+    comments_empty: 'Nessun commento per ora.',
+    comments_loading: 'Caricamento commenti...',
+    comments_error: 'Errore nel caricamento commenti',
+    comments_saved: 'Commento inviato',
+    comments_target_media: 'Commenti foto/video',
+    comments_target_note: 'Commenti testo del giorno'
   },
   en: {
     eyebrow: 'Travel diary',
@@ -79,7 +90,18 @@ const I18N = {
     delete_success: '{count} files deleted.',
     delete_error: 'Delete failed',
     deleting: 'Deleting...',
-    carousel: 'Carousel'
+    carousel: 'Carousel',
+    comments: 'Comments',
+    comments_open: 'Open comments',
+    comments_name: 'Name',
+    comments_text: 'Write a comment',
+    comments_send: 'Send',
+    comments_empty: 'No comments yet.',
+    comments_loading: 'Loading comments...',
+    comments_error: 'Failed to load comments',
+    comments_saved: 'Comment posted',
+    comments_target_media: 'Media comments',
+    comments_target_note: 'Day text comments'
   }
 };
 
@@ -104,12 +126,28 @@ const setLang = (lang) => {
     btn.setAttribute('aria-label', I18N[lang].share);
     btn.setAttribute('title', I18N[lang].share);
   });
+  document.querySelectorAll('[data-comment-target]').forEach((btn) => {
+    btn.setAttribute('aria-label', I18N[lang].comments_open);
+    btn.setAttribute('title', I18N[lang].comments_open);
+    const count = Number((btn.querySelector('[data-comment-count]') || {}).textContent || 0);
+    btn.innerHTML = `${getCommentIconMarkup()}<span class="comment-count${count > 0 ? ' is-visible' : ''}" data-comment-count>${count > 0 ? count : ''}</span>`;
+  });
+  if (commentsAuthorInput) commentsAuthorInput.placeholder = I18N[lang].comments_name;
+  if (commentsTextInput) commentsTextInput.placeholder = I18N[lang].comments_text;
+  if (commentsModalTitle && commentsModalTarget) {
+    commentsModalTitle.textContent = getCommentTargetTitle(commentsModalTarget);
+  }
+  if (commentsForm) {
+    const submit = commentsForm.querySelector('button[type="submit"]');
+    if (submit) submit.textContent = I18N[lang].comments_send;
+  }
   renderDates();
   renderManageTools();
 };
 
 let dataCache = null;
 let trackByDay = null;
+let normalizedTrackByDay = null;
 let miniMap = null;
 let miniLayer = null;
 let dayMapRegistry = new Map();
@@ -120,6 +158,10 @@ let lazyMediaObserver = null;
 let deleteInFlight = false;
 const selectedIds = new Set();
 let unlockedDayKeys = new Set();
+const commentCounts = new Map();
+const commentThreads = new Map();
+let commentsModalTarget = '';
+let adminAuthenticated = false;
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const PHOTO_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp']);
@@ -197,11 +239,139 @@ const postJsonWithApiFallback = async (path, payload) => {
   throw lastError || new Error('API unavailable');
 };
 
+const getJsonWithApiFallback = async (path) => {
+  let lastError = null;
+  for (const base of API_BASE_CANDIDATES) {
+    const url = `${base}${path}`;
+    try {
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) {
+        const detail = await response.text();
+        const err = new Error(detail || `HTTP ${response.status}`);
+        err.status = response.status;
+        lastError = err;
+        if (response.status === 404 || response.status === 405 || response.status === 501) {
+          continue;
+        }
+        throw err;
+      }
+      return response.json();
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('API unavailable');
+};
+
+const getAdminSessionStatus = async () => {
+  try {
+    const payload = await getJsonWithApiFallback('/api/admin/session');
+    adminAuthenticated = !!(payload && payload.authenticated);
+    renderManageTools();
+    return adminAuthenticated;
+  } catch {
+    adminAuthenticated = false;
+    renderManageTools();
+    return false;
+  }
+};
+
+const loginAdminSession = async (token) => {
+  const value = String(token || '').trim();
+  if (!value) return false;
+  const { payload } = await postJsonWithApiFallback('/api/admin/session', { token: value });
+  adminAuthenticated = !!(payload && payload.authenticated);
+  renderManageTools();
+  return adminAuthenticated;
+};
+
+const ensureAdminSessionInteractive = async () => {
+  if (adminAuthenticated) return true;
+  const active = await getAdminSessionStatus();
+  if (active) return true;
+  const token = window.prompt('Inserisci token admin per operazione protetta:');
+  if (!token) return false;
+  try {
+    const ok = await loginAdminSession(token);
+    if (!ok) {
+      window.alert('Autenticazione admin fallita.');
+      return false;
+    }
+    return true;
+  } catch (err) {
+    window.alert(`Autenticazione admin fallita: ${err.message || err}`);
+    return false;
+  }
+};
+
 const isPhotoTrackPoint = (point) => {
   const file = (point && point.file ? String(point.file) : '').trim().toLowerCase();
   if (!file.includes('.')) return true;
   const ext = file.split('.').pop();
   return PHOTO_EXTENSIONS.has(ext);
+};
+
+const getTrackPointTimestamp = (point) => {
+  const ts = Date.parse(String(point && point.time ? point.time : ''));
+  return Number.isNaN(ts) ? Number.NEGATIVE_INFINITY : ts;
+};
+
+const normalizeTrackByDayForActivities = (byDay) => {
+  if (!byDay || typeof byDay !== 'object') return null;
+  const out = {};
+  const groups = new Map();
+
+  Object.entries(byDay).forEach(([dayKey, points]) => {
+    const key = String(dayKey || '').slice(0, 10);
+    if (!key || !Array.isArray(points)) return;
+    points.forEach((point) => {
+      const file = String(point && point.file ? point.file : '');
+      if (!file) return;
+      if (!groups.has(file)) groups.set(file, []);
+      groups.get(file).push({ dayKey: key, point });
+    });
+  });
+
+  groups.forEach((entries, file) => {
+    const isRuntastic = file.startsWith('RUNTASTIC_');
+    if (!isRuntastic) {
+      entries.forEach(({ dayKey, point }) => {
+        if (!out[dayKey]) out[dayKey] = [];
+        out[dayKey].push(point);
+      });
+      return;
+    }
+
+    const sorted = [...entries].sort(
+      (a, b) => getTrackPointTimestamp(a.point) - getTrackPointTimestamp(b.point)
+    );
+    const dayCounts = new Map();
+    sorted.forEach(({ point, dayKey }) => {
+      const day = String((point && point.date) || dayKey || '').slice(0, 10);
+      if (!day) return;
+      dayCounts.set(day, (dayCounts.get(day) || 0) + 1);
+    });
+    const fallbackDay = String(
+      (sorted[0] && sorted[0].point && sorted[0].point.date) || (sorted[0] && sorted[0].dayKey) || ''
+    ).slice(0, 10);
+    let anchorDay = fallbackDay;
+    let bestCount = -1;
+    dayCounts.forEach((count, day) => {
+      if (count > bestCount) {
+        bestCount = count;
+        anchorDay = day;
+      }
+    });
+    if (!anchorDay) return;
+    if (!out[anchorDay]) out[anchorDay] = [];
+    sorted.forEach(({ point }) => out[anchorDay].push(point));
+  });
+
+  Object.values(out).forEach((arr) => {
+    arr.sort((a, b) => getTrackPointTimestamp(a) - getTrackPointTimestamp(b));
+  });
+
+  return out;
 };
 
 const toFiniteCoord = (value) => {
@@ -409,8 +579,30 @@ const hydrateLazyMedia = (el) => {
   if (!el) return;
   if (el.tagName === 'IMG') {
     const src = el.dataset.src;
-    if (src && el.src !== src) el.src = src;
-    el.removeAttribute('data-src');
+    if (!src) return;
+    if (el.dataset.lazyHydrating === '1') return;
+    if (el.dataset.lazyLoaded === '1') {
+      el.removeAttribute('data-src');
+      return;
+    }
+    const onLoad = () => {
+      el.dataset.lazyLoaded = '1';
+      el.removeAttribute('data-src');
+      el.removeAttribute('data-lazy-hydrating');
+      el.removeEventListener('load', onLoad);
+      el.removeEventListener('error', onError);
+    };
+    const onError = () => {
+      // Keep data-src so recoverVisibleLazyMedia can retry.
+      el.removeAttribute('data-lazy-hydrating');
+      el.removeEventListener('load', onLoad);
+      el.removeEventListener('error', onError);
+    };
+    el.dataset.lazyHydrating = '1';
+    el.addEventListener('load', onLoad);
+    el.addEventListener('error', onError);
+    if (el.src !== src) el.src = src;
+    else if (el.complete && el.naturalWidth > 0) onLoad();
     return;
   }
   if (el.tagName === 'VIDEO') {
@@ -437,8 +629,11 @@ const ensureLazyMediaObserver = () => {
     (entries) => {
       entries.forEach((entry) => {
         if (!entry.isIntersecting) return;
-        hydrateLazyMedia(entry.target);
-        observer.unobserve(entry.target);
+        const target = entry.target;
+        hydrateLazyMedia(target);
+        if (!(target && target.dataset && target.dataset.src)) {
+          observer.unobserve(target);
+        }
       });
     },
     {
@@ -485,6 +680,14 @@ const modal = document.getElementById('live-modal');
 const modalBody = document.getElementById('live-modal-body');
 const modalClose = document.getElementById('live-modal-close');
 const modalBackdrop = document.getElementById('live-modal-backdrop');
+const commentsModal = document.getElementById('comments-modal');
+const commentsModalBackdrop = document.getElementById('comments-modal-backdrop');
+const commentsModalClose = document.getElementById('comments-modal-close');
+const commentsModalTitle = document.getElementById('comments-modal-title');
+const commentsList = document.getElementById('comments-list');
+const commentsForm = document.getElementById('comments-form');
+const commentsAuthorInput = document.getElementById('comments-author');
+const commentsTextInput = document.getElementById('comments-text');
 let modalItems = [];
 let modalIndexById = new Map();
 let modalGroupByItemId = new Map();
@@ -820,7 +1023,7 @@ const openImageModal = (item, itemIndex = null) => {
   const onRotate = async () => {
     if (!item.id || rotateBtn.disabled) return;
     rotateBtn.disabled = true;
-    try {
+    const doRotate = async () => {
       const { payload } = await postJsonWithApiFallback('/api/rotate', { id: String(item.id), degrees: 90 });
       const cacheBust = payload && payload.cache_bust ? payload.cache_bust : Date.now();
       const modalBase = item.src || item.thumb || '';
@@ -835,7 +1038,24 @@ const openImageModal = (item, itemIndex = null) => {
           imgEl.src = busted;
         });
       }
+    };
+    try {
+      await doRotate();
     } catch (err) {
+      if (err && err.status === 401) {
+        const ok = await ensureAdminSessionInteractive();
+        if (ok) {
+          try {
+            await doRotate();
+            return;
+          } catch (retryErr) {
+            window.alert(`Errore rotazione: ${retryErr.message || retryErr}`);
+            return;
+          }
+        } else {
+          return;
+        }
+      }
       window.alert(`Errore rotazione: ${err.message || err}`);
     } finally {
       rotateBtn.disabled = false;
@@ -1015,6 +1235,159 @@ const highlightLinkedTarget = (el) => {
   window.setTimeout(() => el.classList.remove('is-linked-target'), 6000);
 };
 
+const COMMENT_AUTHOR_STORAGE_KEY = 'cammino_comment_author_v1';
+
+const getCommentIconMarkup = () =>
+  '<span class="comment-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16v10H8l-4 4V5z" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
+
+const formatCommentDate = (value) => {
+  const ts = Date.parse(String(value || ''));
+  if (Number.isNaN(ts)) return '';
+  return new Intl.DateTimeFormat(currentLang, {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(ts));
+};
+
+const getCommentTargetTitle = (targetId) => {
+  const target = String(targetId || '');
+  if (target.startsWith('media-')) return I18N[currentLang].comments_target_media;
+  if (target.startsWith('note-')) return I18N[currentLang].comments_target_note;
+  return I18N[currentLang].comments;
+};
+
+const updateCommentButtonCount = (btn, count) => {
+  if (!btn) return;
+  const badge = btn.querySelector('[data-comment-count]');
+  if (!badge) return;
+  const value = Number.isFinite(Number(count)) ? Number(count) : 0;
+  badge.textContent = value > 0 ? String(value) : '';
+  badge.classList.toggle('is-visible', value > 0);
+};
+
+const syncCommentCountInUi = (targetId, count) => {
+  const target = String(targetId || '');
+  if (!target) return;
+  const esc = (typeof CSS !== 'undefined' && CSS.escape)
+    ? CSS.escape(target)
+    : target.replace(/["\\]/g, '\\$&');
+  commentCounts.set(target, Number(count) || 0);
+  document.querySelectorAll(`[data-comment-target="${esc}"]`).forEach((btn) => {
+    updateCommentButtonCount(btn, commentCounts.get(target));
+  });
+};
+
+const createCommentButton = (targetId, className) => {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = className;
+  btn.setAttribute('aria-label', I18N[currentLang].comments_open);
+  btn.setAttribute('title', I18N[currentLang].comments_open);
+  btn.setAttribute('data-comment-target', String(targetId || ''));
+  btn.innerHTML = `${getCommentIconMarkup()}<span class="comment-count" data-comment-count></span>`;
+  updateCommentButtonCount(btn, commentCounts.get(String(targetId || '')) || 0);
+  btn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openCommentsModal(String(targetId || ''));
+  });
+  return btn;
+};
+
+const refreshCommentCounts = async (targetIds) => {
+  const unique = Array.from(new Set((targetIds || []).map((v) => String(v || '').trim()).filter(Boolean)));
+  if (!unique.length) return;
+  const chunkSize = 80;
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize);
+    try {
+      const query = encodeURIComponent(chunk.join(','));
+      const payload = await getJsonWithApiFallback(`/api/comments/counts?targets=${query}`);
+      const counts = payload && payload.counts ? payload.counts : {};
+      chunk.forEach((target) => {
+        syncCommentCountInUi(target, counts[target] || 0);
+      });
+    } catch {
+      // keep UI usable even if comments API is unavailable
+    }
+  }
+};
+
+const renderCommentsList = (comments, error = '') => {
+  if (!commentsList) return;
+  commentsList.innerHTML = '';
+  if (error) {
+    const row = document.createElement('div');
+    row.className = 'comments__state';
+    row.textContent = error;
+    commentsList.appendChild(row);
+    return;
+  }
+  if (!Array.isArray(comments) || !comments.length) {
+    const row = document.createElement('div');
+    row.className = 'comments__state';
+    row.textContent = I18N[currentLang].comments_empty;
+    commentsList.appendChild(row);
+    return;
+  }
+  comments.forEach((comment) => {
+    const row = document.createElement('div');
+    row.className = 'comments__item';
+    const head = document.createElement('div');
+    head.className = 'comments__item-head';
+    const author = document.createElement('span');
+    author.className = 'comments__item-author';
+    author.textContent = comment.author || '';
+    const date = document.createElement('span');
+    date.className = 'comments__item-date';
+    date.textContent = formatCommentDate(comment.created_at);
+    head.appendChild(author);
+    head.appendChild(date);
+    const body = document.createElement('div');
+    body.className = 'comments__item-body';
+    body.textContent = comment.text || '';
+    row.appendChild(head);
+    row.appendChild(body);
+    commentsList.appendChild(row);
+  });
+};
+
+const loadCommentsForTarget = async (targetId) => {
+  if (!commentsList) return;
+  commentsList.innerHTML = `<div class="comments__state">${I18N[currentLang].comments_loading}</div>`;
+  try {
+    const payload = await getJsonWithApiFallback(`/api/comments?target=${encodeURIComponent(targetId)}`);
+    const comments = Array.isArray(payload && payload.comments) ? payload.comments : [];
+    commentThreads.set(targetId, comments);
+    syncCommentCountInUi(targetId, comments.length);
+    renderCommentsList(comments);
+  } catch (err) {
+    renderCommentsList([], `${I18N[currentLang].comments_error}: ${err.message || err}`);
+  }
+};
+
+const openCommentsModal = (targetId) => {
+  const target = String(targetId || '').trim();
+  if (!target || !commentsModal) return;
+  commentsModalTarget = target;
+  if (commentsModalTitle) commentsModalTitle.textContent = getCommentTargetTitle(target);
+  const savedAuthor = window.localStorage.getItem(COMMENT_AUTHOR_STORAGE_KEY) || '';
+  if (commentsAuthorInput && !commentsAuthorInput.value) commentsAuthorInput.value = savedAuthor;
+  loadCommentsForTarget(target);
+  commentsModal.classList.add('open');
+  commentsModal.setAttribute('aria-hidden', 'false');
+};
+
+const closeCommentsModal = () => {
+  if (!commentsModal) return;
+  commentsModal.classList.remove('open');
+  commentsModal.setAttribute('aria-hidden', 'true');
+  commentsModalTarget = '';
+};
+
 const findDayKeyByItemId = (id) => {
   const key = String(id || '').trim();
   if (!key || !dataCache || !Array.isArray(dataCache.days)) return '';
@@ -1063,6 +1436,13 @@ const renderManageTools = () => {
   const toggleBtn = document.getElementById('toggle-select');
   const deleteBtn = document.getElementById('delete-selected');
   if (!toggleBtn || !deleteBtn) return;
+  if (!adminAuthenticated) {
+    toggleBtn.style.display = 'none';
+    deleteBtn.style.display = 'none';
+    return;
+  }
+  toggleBtn.style.display = '';
+  deleteBtn.style.display = '';
   toggleBtn.textContent = selectedIds.size > 0 ? I18N[currentLang].clear_selected : I18N[currentLang].select_mode;
   toggleBtn.classList.remove('active');
   toggleBtn.disabled = deleteInFlight;
@@ -1116,13 +1496,24 @@ const deleteItemsByIds = async (ids, options = {}) => {
   } = options;
   const uniqueIds = Array.from(new Set((ids || []).map((id) => String(id)).filter(Boolean)));
   if (deleteInFlight || uniqueIds.length === 0) return false;
+  const authOk = await ensureAdminSessionInteractive();
+  if (!authOk) return false;
   deleteInFlight = true;
   renderManageTools();
   const deleteBtn = document.getElementById('delete-selected');
   if (deleteBtn) deleteBtn.textContent = I18N[currentLang].deleting;
 
   try {
-    const { payload } = await postJsonWithApiFallback('/api/delete', { ids: uniqueIds });
+    let payload;
+    try {
+      const out = await postJsonWithApiFallback('/api/delete', { ids: uniqueIds });
+      payload = out.payload;
+    } catch (err) {
+      if (err && err.status === 401) {
+        adminAuthenticated = false;
+      }
+      throw err;
+    }
     if (payload && payload.data) {
       dataCache = payload.data;
     } else {
@@ -1156,7 +1547,36 @@ const deleteSelectedItems = async () => {
 
 modalClose.addEventListener('click', closeModal);
 modalBackdrop.addEventListener('click', closeModal);
+if (commentsModalClose) commentsModalClose.addEventListener('click', closeCommentsModal);
+if (commentsModalBackdrop) commentsModalBackdrop.addEventListener('click', closeCommentsModal);
+if (commentsForm) {
+  commentsForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!commentsModalTarget) return;
+    const author = String((commentsAuthorInput && commentsAuthorInput.value) || '').trim();
+    const text = String((commentsTextInput && commentsTextInput.value) || '').trim();
+    if (!author || !text) return;
+    try {
+      if (commentsAuthorInput) {
+        window.localStorage.setItem(COMMENT_AUTHOR_STORAGE_KEY, author);
+      }
+      await postJsonWithApiFallback('/api/comments', {
+        target: commentsModalTarget,
+        author,
+        text
+      });
+      if (commentsTextInput) commentsTextInput.value = '';
+      await loadCommentsForTarget(commentsModalTarget);
+    } catch (err) {
+      window.alert(`${I18N[currentLang].comments_error}: ${err.message || err}`);
+    }
+  });
+}
 document.addEventListener('keydown', (e) => {
+  if (commentsModal && commentsModal.classList.contains('open') && e.key === 'Escape') {
+    closeCommentsModal();
+    return;
+  }
   if (!modal.classList.contains('open')) return;
   const target = e.target;
   if (target && (target.tagName === 'VIDEO' || target.closest?.('video'))) return;
@@ -1307,8 +1727,9 @@ const buildGroupTimeRangeLabel = (items) => {
     .filter(Boolean);
   if (!times.length) return '';
   if (times.length === 1) return times[0];
-  const start = times[0];
-  const end = times[times.length - 1];
+  const sorted = [...times].sort((a, b) => a.localeCompare(b));
+  const start = sorted[0];
+  const end = sorted[sorted.length - 1];
   return start === end ? start : `${start}-${end}`;
 };
 
@@ -1460,6 +1881,11 @@ const buildMediaCard = (groupItems) => {
         return;
       }
       img.src = IMG_PLACEHOLDER;
+      if (!img.dataset.src) {
+        const retrySrc = item.thumb || item.src;
+        if (retrySrc) img.dataset.src = retrySrc;
+      }
+      window.setTimeout(() => registerLazyMedia(img), 250);
     });
     registerLazyMedia(img);
     card.appendChild(img);
@@ -1482,6 +1908,11 @@ const buildMediaCard = (groupItems) => {
     posterImg.decoding = 'async';
     posterImg.addEventListener('error', () => {
       posterImg.src = IMG_PLACEHOLDER;
+      if (!posterImg.dataset.src) {
+        const retrySrc = item.poster || item.thumb || item.src;
+        if (retrySrc) posterImg.dataset.src = retrySrc;
+      }
+      window.setTimeout(() => registerLazyMedia(posterImg), 250);
     });
     registerLazyMedia(posterImg);
     posterImg.addEventListener('click', () => {
@@ -1525,6 +1956,8 @@ const buildMediaCard = (groupItems) => {
   if (item.id) {
     const shareBtn = createShareButton(`media-${item.id}`, 'media-share');
     card.appendChild(shareBtn);
+    const commentBtn = createCommentButton(`media-${item.id}`, 'media-comment');
+    card.appendChild(commentBtn);
   }
 
   card.appendChild(selectBtn);
@@ -1642,8 +2075,13 @@ const buildDay = (day, idx, isPortfolio) => {
   notesLabel.setAttribute('data-notes-label', '1');
   notesLabel.textContent = I18N[currentLang].notes_label;
   const notesShare = createShareButton(`note-${day.date}`, 'notes__share');
+  const notesComments = createCommentButton(`note-${day.date}`, 'notes__comments');
+  const notesActions = document.createElement('div');
+  notesActions.className = 'notes__actions';
+  notesActions.appendChild(notesComments);
+  notesActions.appendChild(notesShare);
   notesHead.appendChild(notesLabel);
-  notesHead.appendChild(notesShare);
+  notesHead.appendChild(notesActions);
   const notesBody = document.createElement('div');
   if (notesText) {
     notesBody.innerHTML = renderNoteHtml(notesText);
@@ -1836,7 +2274,10 @@ const simplifyTrackPoints = (points, minDistM = 10) => {
 };
 
 const getDayTrackSegments = (dayKey) => {
-  const raw = ((trackByDay && trackByDay[dayKey]) || [])
+  const dayPoints = (normalizedTrackByDay && normalizedTrackByDay[dayKey])
+    || (trackByDay && trackByDay[dayKey])
+    || [];
+  const raw = dayPoints
     .filter(isPhotoTrackPoint)
     .map((p) => ({
       lat: Number(p.lat),
@@ -2113,7 +2554,8 @@ const renderMiniMap = (dayKey, dayIndex = null) => {
 
     const dayTracks = [];
     dayKeysToDraw.forEach((key) => {
-      const pts = ((trackByDay && trackByDay[key]) || []).filter(isPhotoTrackPoint);
+      const sourceByDay = normalizedTrackByDay || trackByDay;
+      const pts = ((sourceByDay && sourceByDay[key]) || []).filter(isPhotoTrackPoint);
       if (pts.length) dayTracks.push(pts);
     });
 
@@ -2387,6 +2829,14 @@ const renderView = () => {
   observeSections();
   renderDates();
   renderManageTools();
+  const commentTargets = [];
+  list.forEach((day) => {
+    commentTargets.push(`note-${day.date}`);
+    (day.items || []).forEach((item) => {
+      if (item && item.id) commentTargets.push(`media-${item.id}`);
+    });
+  });
+  refreshCommentCounts(commentTargets).catch(() => {});
   if (window.location.hash) {
     window.setTimeout(() => focusHashAnchor(window.location.hash), 20);
   }
@@ -2401,12 +2851,13 @@ const init = async () => {
     }
   };
   try {
-    let data = window.__CAMMINO_ENTRIES__;
-    if (!data) {
-      const res = await fetch(withCacheBust('data/entries.json', cacheBust), {
-        cache: 'no-store'
-      });
-      data = await res.json();
+    // Always load fresh JSON to avoid stale cached inline payloads.
+    const res = await fetch(withCacheBust('data/entries.json', cacheBust), {
+      cache: 'no-store'
+    });
+    let data = await res.json();
+    if (!data || !Array.isArray(data.days)) {
+      data = window.__CAMMINO_ENTRIES__ || data;
     }
     try {
       const resTrackPoints = await fetch(withCacheBust('data/track_points.json', cacheBust), {
@@ -2429,6 +2880,7 @@ const init = async () => {
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         trackByDay = json || null;
+        normalizedTrackByDay = normalizeTrackByDayForActivities(trackByDay);
         refreshDayTrackCards();
         if (data.days.length) {
           renderMiniMap(data.days[0].date, 0);
@@ -2436,6 +2888,7 @@ const init = async () => {
       })
       .catch(() => {
         trackByDay = null;
+        normalizedTrackByDay = null;
       });
   } catch (err) {
     fail(`Errore nel caricamento: ${err.message || err}`);
@@ -2474,6 +2927,7 @@ window.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('hashchange', () => {
       focusHashAnchor(window.location.hash);
     });
+    getAdminSessionStatus().catch(() => {});
     init();
   } catch (err) {
     const content = document.getElementById('content');

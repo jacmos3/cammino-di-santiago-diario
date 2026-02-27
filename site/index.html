@@ -94,6 +94,20 @@
     </div>
   </div>
 
+  <div class="modal comments-modal" id="comments-modal" aria-hidden="true">
+    <div class="modal__backdrop" id="comments-modal-backdrop"></div>
+    <div class="modal__content comments-modal__content">
+      <button class="modal__close" id="comments-modal-close" aria-label="Close">×</button>
+      <h3 class="comments-modal__title" id="comments-modal-title">Commenti</h3>
+      <div class="comments__list" id="comments-list"></div>
+      <form class="comments__form" id="comments-form">
+        <input id="comments-author" type="text" maxlength="80" placeholder="Nome" required />
+        <textarea id="comments-text" maxlength="1200" placeholder="Scrivi un commento" required></textarea>
+        <button type="submit">Invia</button>
+      </form>
+    </div>
+  </div>
+
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="

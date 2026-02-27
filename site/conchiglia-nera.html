@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Conchiglia Nera · Admin Commenti</title>
+  <style>
+    :root {
+      --bg: #f4efe7;
+      --card: #fffaf2;
+      --ink: #1f1a16;
+      --muted: #6f6156;
+      --accent: #1f5f5b;
+      --danger: #9f1b1b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.6rem;
+    }
+    .subtitle {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid rgba(31, 26, 22, 0.1);
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: 1.2fr auto 1fr 1fr auto auto;
+      gap: 8px;
+      align-items: center;
+    }
+    input, select, button {
+      border: 1px solid rgba(31, 26, 22, 0.2);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--ink);
+      padding: 9px 10px;
+      font: inherit;
+    }
+    button {
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #fffaf2;
+      border-color: rgba(31, 95, 91, 0.45);
+    }
+    .stats {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    th, td {
+      border-bottom: 1px solid rgba(31, 26, 22, 0.08);
+      text-align: left;
+      padding: 8px 6px;
+      vertical-align: top;
+    }
+    th {
+      font-size: 0.8rem;
+      color: var(--muted);
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+    }
+    .target {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      background: rgba(31, 95, 91, 0.1);
+      border-radius: 999px;
+      padding: 2px 8px;
+      display: inline-block;
+    }
+    .target-link {
+      color: #1f5f5b;
+      text-decoration: none;
+      border: 1px solid rgba(31, 95, 91, 0.25);
+    }
+    .target-link:hover {
+      text-decoration: underline;
+      background: rgba(31, 95, 91, 0.18);
+    }
+    .comment-text {
+      max-width: 520px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .actions {
+      display: flex;
+      gap: 6px;
+    }
+    .btn-danger {
+      background: #fff;
+      color: var(--danger);
+      border-color: rgba(159, 27, 27, 0.4);
+    }
+    .status {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-top: 6px;
+      min-height: 1.2em;
+    }
+    @media (max-width: 900px) {
+      .controls {
+        grid-template-columns: 1fr;
+      }
+      .comment-text {
+        max-width: 260px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <div>
+        <h1>Conchiglia Nera</h1>
+        <div class="subtitle">Pannello admin per monitorare e cancellare i commenti</div>
+      </div>
+      <a href="index.html">Torna al sito</a>
+    </div>
+
+    <div class="card">
+      <div class="controls">
+        <input id="admin-token" type="password" placeholder="Token admin" />
+        <button id="login-btn" class="btn-primary">Accedi</button>
+        <input id="search-q" type="text" placeholder="Cerca in autore/testo/target" />
+        <select id="target-filter">
+          <option value="">Tutti i target</option>
+        </select>
+        <button id="refresh-btn" class="btn-primary">Aggiorna</button>
+        <button id="clear-btn">Reset filtri</button>
+        <button id="logout-btn">Logout</button>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+
+    <div class="card">
+      <div id="stats" class="stats"></div>
+      <div style="overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Autore</th>
+              <th>Target</th>
+              <th>Commento</th>
+              <th>Azioni</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const tokenInput = document.getElementById('admin-token');
+    const searchInput = document.getElementById('search-q');
+    const targetFilter = document.getElementById('target-filter');
+    const loginBtn = document.getElementById('login-btn');
+    const refreshBtn = document.getElementById('refresh-btn');
+    const clearBtn = document.getElementById('clear-btn');
+    const logoutBtn = document.getElementById('logout-btn');
+    const statusEl = document.getElementById('status');
+    const rowsEl = document.getElementById('rows');
+    const statsEl = document.getElementById('stats');
+    const STORAGE_KEY = 'cammino_admin_token_v1';
+
+    const escapeHtml = (value) => String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    const formatDate = (iso) => {
+      const ts = Date.parse(String(iso || ''));
+      if (Number.isNaN(ts)) return '';
+      return new Intl.DateTimeFormat('it-IT', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }).format(new Date(ts));
+    };
+
+    const setStatus = (msg, isError = false) => {
+      statusEl.textContent = msg || '';
+      statusEl.style.color = isError ? '#9f1b1b' : '#6f6156';
+    };
+
+    const getToken = () => String(tokenInput.value || '').trim();
+
+    const checkSession = async () => {
+      const response = await fetch('/api/admin/session', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json();
+      return !!(payload && payload.authenticated);
+    };
+
+    const login = async () => {
+      const token = getToken();
+      if (!token) {
+        setStatus('Inserisci il token admin.', true);
+        return false;
+      }
+      const response = await fetch('/api/admin/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+      window.localStorage.setItem(STORAGE_KEY, token);
+      return true;
+    };
+
+    const logout = async () => {
+      await fetch('/api/admin/logout', { method: 'POST' });
+      setStatus('Sessione admin chiusa.');
+    };
+
+    const fetchAdminComments = async () => {
+      const authenticated = await checkSession();
+      if (!authenticated) {
+        setStatus('Non autenticato. Premi Accedi.', true);
+        rowsEl.innerHTML = '';
+        return null;
+      }
+      const params = new URLSearchParams();
+      const target = String(targetFilter.value || '').trim();
+      const q = String(searchInput.value || '').trim();
+      if (target) params.set('target', target);
+      if (q) params.set('q', q);
+      params.set('limit', '2000');
+
+      setStatus('Caricamento...');
+      const response = await fetch(`/api/admin/comments?${params.toString()}`, { cache: 'no-store' });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+      return response.json();
+    };
+
+    const renderRows = (comments) => {
+      const list = Array.isArray(comments) ? comments : [];
+      if (!list.length) {
+        rowsEl.innerHTML = '<tr><td colspan="5" style="color:#6f6156;">Nessun commento trovato.</td></tr>';
+        return;
+      }
+      rowsEl.innerHTML = list.map((c) => {
+        const targetHref = `index.html#${encodeURIComponent(String(c.target || ''))}`;
+        return `
+        <tr data-id="${escapeHtml(c.id)}">
+          <td>${escapeHtml(formatDate(c.created_at))}</td>
+          <td>${escapeHtml(c.author)}</td>
+          <td><a class="target target-link" href="${escapeHtml(targetHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(c.target)}</a></td>
+          <td class="comment-text">${escapeHtml(c.text)}</td>
+          <td>
+            <div class="actions">
+              <button class="btn-danger" data-action="delete" data-id="${escapeHtml(c.id)}">Elimina</button>
+            </div>
+          </td>
+        </tr>
+      `;
+      }).join('');
+    };
+
+    const renderStats = (payload) => {
+      const total = Number(payload && payload.total ? payload.total : 0);
+      const byTarget = payload && payload.counts_by_target ? payload.counts_by_target : {};
+      const targetCount = Object.keys(byTarget).length;
+      statsEl.innerHTML = `
+        <span>Totale commenti: <strong>${total}</strong></span>
+        <span>Target attivi: <strong>${targetCount}</strong></span>
+      `;
+      const selected = String(targetFilter.value || '');
+      const options = ['<option value="">Tutti i target</option>'];
+      Object.entries(byTarget)
+        .sort((a, b) => b[1] - a[1])
+        .forEach(([target, count]) => {
+          const isSel = selected === target ? ' selected' : '';
+          options.push(`<option value="${escapeHtml(target)}"${isSel}>${escapeHtml(target)} (${count})</option>`);
+        });
+      targetFilter.innerHTML = options.join('');
+    };
+
+    const refresh = async () => {
+      try {
+        const payload = await fetchAdminComments();
+        if (!payload) return;
+        renderStats(payload || {});
+        renderRows(payload && payload.comments);
+        setStatus(`Caricati ${Array.isArray(payload && payload.comments) ? payload.comments.length : 0} commenti.`);
+      } catch (err) {
+        setStatus(`Errore: ${err.message || err}`, true);
+      }
+    };
+
+    const deleteComment = async (id) => {
+      const ok = window.confirm('Confermi eliminazione commento?');
+      if (!ok) return;
+      const response = await fetch('/api/admin/comments/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+    };
+
+    rowsEl.addEventListener('click', async (event) => {
+      const btn = event.target.closest('button[data-action="delete"]');
+      if (!btn) return;
+      const id = String(btn.dataset.id || '');
+      if (!id) return;
+      try {
+        await deleteComment(id);
+        await refresh();
+      } catch (err) {
+        setStatus(`Delete fallita: ${err.message || err}`, true);
+      }
+    });
+
+    refreshBtn.addEventListener('click', () => {
+      refresh().catch(() => {});
+    });
+    loginBtn.addEventListener('click', async () => {
+      try {
+        await login();
+        setStatus('Autenticazione admin effettuata.');
+        await refresh();
+      } catch (err) {
+        setStatus(`Login fallito: ${err.message || err}`, true);
+      }
+    });
+    logoutBtn.addEventListener('click', async () => {
+      try {
+        await logout();
+      } catch (err) {
+        setStatus(`Logout fallito: ${err.message || err}`, true);
+      }
+    });
+    clearBtn.addEventListener('click', () => {
+      searchInput.value = '';
+      targetFilter.value = '';
+      refresh().catch(() => {});
+    });
+    searchInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') refresh().catch(() => {});
+    });
+    tokenInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') refresh().catch(() => {});
+    });
+
+    const savedToken = window.localStorage.getItem(STORAGE_KEY) || '';
+    if (savedToken) tokenInput.value = savedToken;
+    checkSession().then((ok) => {
+      if (ok) {
+        setStatus('Sessione admin attiva.');
+        refresh().catch(() => {});
+      } else if (savedToken) {
+        setStatus('Sessione non attiva. Premi Accedi per autenticarti.');
+      }
+    }).catch(() => {});
+  </script>
+</body>
+</html>
