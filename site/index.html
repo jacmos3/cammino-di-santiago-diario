@@ -29,10 +29,6 @@
             <button class="lang__btn" data-lang="it">IT</button>
             <button class="lang__btn" data-lang="en">EN</button>
           </div>
-          <div class="view-toggle">
-            <button class="view-btn" data-view="diary" data-i18n="view_diary">Diario</button>
-            <button class="view-btn" data-view="portfolio" data-i18n="view_portfolio">Portfolio</button>
-          </div>
           <div class="manage-tools">
             <button class="manage-btn" id="toggle-select" data-i18n="select_mode">Seleziona</button>
             <button class="manage-btn manage-btn--danger" id="delete-selected" disabled data-i18n="delete_selected">
@@ -69,10 +65,25 @@
     <div class="loading" data-i18n="loading">Sto preparando il diario…</div>
   </main>
 
+  <button class="day-picker-fab" id="day-picker-toggle" type="button">Vai al giorno</button>
+  <div class="day-picker-sheet" id="day-picker-sheet" aria-hidden="true">
+    <div class="day-picker-sheet__backdrop" id="day-picker-backdrop"></div>
+    <div class="day-picker-sheet__panel">
+      <div class="day-picker-sheet__head">
+        <strong id="day-picker-title">Vai al giorno</strong>
+        <button type="button" class="day-picker-sheet__close" id="day-picker-close" aria-label="Chiudi">×</button>
+      </div>
+      <div class="day-picker-sheet__list" id="day-picker-list"></div>
+    </div>
+  </div>
+
   <div class="mini-map" id="mini-map">
     <div class="mini-map__title">
       <span class="mini-map__date" id="mini-map-date"></span>
-      <a class="mini-map__open" href="map.html" data-i18n="open_short">Apri Mappa</a>
+      <div class="mini-map__actions">
+        <a class="mini-map__open" href="map.html" data-i18n="open_short">Apri Mappa</a>
+        <button class="mini-map__toggle" id="mini-map-toggle" type="button" aria-label="Minimizza mappa">–</button>
+      </div>
     </div>
     <div class="mini-map__body" id="mini-map-body"></div>
   </div>

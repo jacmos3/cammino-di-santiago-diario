@@ -8,6 +8,7 @@ const ROOT = process.cwd();
 const SRC_DIR = 'new';
 const DATA_DIR = path.join(ROOT, 'data');
 const VIDEO_OVERRIDES_PATH = path.join(DATA_DIR, 'video_include_overrides.txt');
+const CAMINO_TIME_ZONE = 'Europe/Rome';
 const ASSETS_DIR = path.join(ROOT, 'assets');
 const IMG_DIR = path.join(ASSETS_DIR, 'img');
 const THUMB_DIR = path.join(ASSETS_DIR, 'thumb');
@@ -26,6 +27,10 @@ const IMAGE_PARALLEL = 6;
 const VIDEO_PARALLEL = 3;
 
 const exifArgs = [
+  '-api',
+  'QuickTimeUTC=1',
+  '-api',
+  `TimeZone=${CAMINO_TIME_ZONE}`,
   '-json',
   '-n',
   '-q',

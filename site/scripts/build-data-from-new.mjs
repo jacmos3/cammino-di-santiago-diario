@@ -8,10 +8,15 @@ const ROOT = process.cwd();
 const SRC_DIR = 'new';
 const DATA_DIR = path.join(ROOT, 'data');
 const NOTES_PATH = path.join(DATA_DIR, 'notes.json');
+const CAMINO_TIME_ZONE = 'Europe/Rome';
 
 const EXTS = ['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp', 'tif', 'tiff', 'mov', 'mp4', 'm4v'];
 
 const exifArgs = [
+  '-api',
+  'QuickTimeUTC=1',
+  '-api',
+  `TimeZone=${CAMINO_TIME_ZONE}`,
   '-json',
   '-n',
   '-q',

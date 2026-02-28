@@ -11,6 +11,55 @@ const isPhotoFile = (name) => {
   return PHOTO_EXTENSIONS.has(ext);
 };
 
+const parsePointTs = (point) => {
+  const ts = Date.parse(String(point && point.time ? point.time : ''));
+  return Number.isNaN(ts) ? Number.NEGATIVE_INFINITY : ts;
+};
+
+const normalizeTrackPointsByActivityDay = (points) => {
+  const list = Array.isArray(points) ? points : [];
+  const groups = new Map();
+  list.forEach((point) => {
+    const file = String(point && point.file ? point.file : '');
+    if (!file) return;
+    if (!groups.has(file)) groups.set(file, []);
+    groups.get(file).push(point);
+  });
+
+  const out = [];
+  groups.forEach((entries, file) => {
+    const isRuntastic = file.startsWith('RUNTASTIC_');
+    if (!isRuntastic) {
+      entries.forEach((point) => out.push({
+        ...point,
+        mapDate: String(point && point.date ? point.date : '').slice(0, 10)
+      }));
+      return;
+    }
+
+    const sorted = [...entries].sort((a, b) => parsePointTs(a) - parsePointTs(b));
+    const dayCounts = new Map();
+    sorted.forEach((point) => {
+      const day = String(point && point.date ? point.date : '').slice(0, 10);
+      if (!day) return;
+      dayCounts.set(day, (dayCounts.get(day) || 0) + 1);
+    });
+    let anchorDate = String((sorted[0] && sorted[0].date) || '').slice(0, 10);
+    let bestCount = -1;
+    dayCounts.forEach((count, day) => {
+      if (count > bestCount) {
+        bestCount = count;
+        anchorDate = day;
+      }
+    });
+    sorted.forEach((point) => out.push({
+      ...point,
+      mapDate: anchorDate
+    }));
+  });
+  return out;
+};
+
 const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
   attribution: '&copy; OpenStreetMap contributors'
@@ -106,7 +155,8 @@ Promise.all([
   fetch('data/track_points.json').then((res) => res.json()).catch(() => [])
 ])
   .then(([trackPoints]) => {
-    const pointFeatures = (Array.isArray(trackPoints) ? trackPoints : [])
+    const normalizedTrackPoints = normalizeTrackPointsByActivityDay(trackPoints);
+    const pointFeatures = normalizedTrackPoints
       .filter((p) => Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)))
       .filter((p) => isPhotoFile(p.file))
       .sort((a, b) => {
@@ -126,7 +176,7 @@ Promise.all([
         properties: {
           time: p.time || '',
           file: p.file || '',
-          date: p.date || ''
+          date: p.mapDate || p.date || ''
         }
       }));
     const { lineSegments, flightSegments } = buildSegmentsFromFeatures(pointFeatures);
