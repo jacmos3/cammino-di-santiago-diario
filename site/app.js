@@ -26,6 +26,8 @@ const I18N = {
     mini_map_cumulative: 'Percorso cumulativo',
     open_map: 'Apri la mappa',
     open_short: 'Apri Mappa',
+    goto_day: 'Vai al giorno',
+    close: 'Chiudi',
     mini_map_minimize: 'Minimizza mappa',
     mini_map_expand: 'Espandi mappa',
     strava_label: 'Strava',
@@ -87,6 +89,8 @@ const I18N = {
     mini_map_cumulative: 'Cumulative route',
     open_map: 'Open map',
     open_short: 'Open Map',
+    goto_day: 'Jump to day',
+    close: 'Close',
     mini_map_minimize: 'Minimize map',
     mini_map_expand: 'Expand map',
     strava_label: 'Strava',
@@ -158,8 +162,12 @@ const setLang = (lang) => {
     const submit = commentsForm.querySelector('button[type="submit"]');
     if (submit) submit.textContent = I18N[lang].comments_send;
   }
-  renderDates();
-  renderManageTools();
+  if (dataCache) {
+    renderView();
+  } else {
+    renderDates();
+    renderManageTools();
+  }
 };
 
 let dataCache = null;
@@ -180,6 +188,7 @@ const commentThreads = new Map();
 let commentsModalTarget = '';
 let adminAuthenticated = false;
 let miniMapCollapsed = false;
+let dayPickerOpen = false;
 const MINI_MAP_COLLAPSED_KEY = 'cammino_minimap_collapsed_v1';
 const dayDistanceKmByDate = new Map();
 const dayDistanceCumKmByDate = new Map();
@@ -661,6 +670,12 @@ const renderDates = () => {
   document.querySelectorAll('.day-track__open').forEach((el) => {
     el.textContent = I18N[currentLang].open_map;
   });
+  const dayPickerToggle = document.getElementById('day-picker-toggle');
+  if (dayPickerToggle) dayPickerToggle.textContent = I18N[currentLang].goto_day;
+  const dayPickerTitle = document.getElementById('day-picker-title');
+  if (dayPickerTitle) dayPickerTitle.textContent = I18N[currentLang].goto_day;
+  const dayPickerClose = document.getElementById('day-picker-close');
+  if (dayPickerClose) dayPickerClose.setAttribute('aria-label', I18N[currentLang].close);
   document.querySelectorAll('[data-day-track-empty]').forEach((el) => {
     el.textContent = I18N[currentLang].mini_map_empty;
   });
@@ -2709,6 +2724,41 @@ const buildTimelineNav = (days) => {
     if (idx === 0) btn.classList.add('active');
     nav.appendChild(btn);
   });
+  buildDayPicker(days);
+};
+
+const closeDayPicker = () => {
+  const sheet = document.getElementById('day-picker-sheet');
+  if (!sheet) return;
+  dayPickerOpen = false;
+  sheet.classList.remove('open');
+  sheet.setAttribute('aria-hidden', 'true');
+};
+
+const openDayPicker = () => {
+  const sheet = document.getElementById('day-picker-sheet');
+  if (!sheet) return;
+  dayPickerOpen = true;
+  sheet.classList.add('open');
+  sheet.setAttribute('aria-hidden', 'false');
+};
+
+const buildDayPicker = (days) => {
+  const list = document.getElementById('day-picker-list');
+  if (!list) return;
+  list.innerHTML = '';
+  (days || []).forEach((day) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'day-picker-sheet__item';
+    btn.textContent = getDayTitle(day);
+    btn.addEventListener('click', () => {
+      closeDayPicker();
+      const section = document.getElementById(`day-${day.date}`);
+      if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    list.appendChild(btn);
+  });
 };
 
 const ensureMiniMap = () => {
@@ -3206,6 +3256,23 @@ window.addEventListener('DOMContentLoaded', () => {
     const deleteSelectedBtn = document.getElementById('delete-selected');
     const timelineActions = document.getElementById('timeline-nav-actions');
     if (timelineActions && deleteSelectedBtn) timelineActions.appendChild(deleteSelectedBtn);
+    const dayPickerToggle = document.getElementById('day-picker-toggle');
+    const dayPickerSheet = document.getElementById('day-picker-sheet');
+    const dayPickerBackdrop = document.getElementById('day-picker-backdrop');
+    const dayPickerClose = document.getElementById('day-picker-close');
+    if (dayPickerToggle) {
+      dayPickerToggle.addEventListener('click', () => {
+        if (dayPickerOpen) closeDayPicker();
+        else openDayPicker();
+      });
+    }
+    if (dayPickerBackdrop) dayPickerBackdrop.addEventListener('click', closeDayPicker);
+    if (dayPickerClose) dayPickerClose.addEventListener('click', closeDayPicker);
+    if (dayPickerSheet) {
+      dayPickerSheet.addEventListener('click', (event) => {
+        if (event.target === dayPickerSheet) closeDayPicker();
+      });
+    }
     if (toggleSelectBtn) toggleSelectBtn.addEventListener('click', toggleSelectionMode);
     if (deleteSelectedBtn) {
       deleteSelectedBtn.addEventListener('click', () => {
@@ -3236,6 +3303,9 @@ window.addEventListener('DOMContentLoaded', () => {
     renderManageTools();
     window.addEventListener('hashchange', () => {
       focusHashAnchor(window.location.hash);
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && dayPickerOpen) closeDayPicker();
     });
     getAdminSessionStatus().catch(() => {});
     init();
